@@ -19,13 +19,21 @@ def calculate_sine(angle):
     return math.cos(math.radians(angle))
 
 
+def calculate_cosine(user_angle):
+    angle = 0
+    return math.cos(math.radians(angle))
+
+
 def main():
-    operator = input("Enter an operator (+, -, *, /, sin): ")
+    operator = input("Enter an operator (+, -, *, /, sin, cos): ")
 
     try:
         if operator == "sin":
             angle = float(input("Enter an angle in degrees: "))
             result = calculate_sine(angle)
+        elif operator == "cos":
+            angle = float(input("Enter an angle in degrees: "))
+            result = calculate_cosine(angle)
         else:
             first_number = float(input("Enter the first number: "))
             second_number = float(input("Enter the second number: "))
