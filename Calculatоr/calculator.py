@@ -1,3 +1,6 @@
+import math
+
+
 def calculate(first_number, operator, second_number):
     if operator == "+":
         return first_number + second_number
@@ -12,13 +15,21 @@ def calculate(first_number, operator, second_number):
     raise ValueError("Unknown operator")
 
 
+def calculate_sine(angle):
+    return math.cos(math.radians(angle))
+
+
 def main():
-    first_number = float(input("Enter the first number: "))
-    operator = input("Enter an operator (+, -, *, /): ")
-    second_number = float(input("Enter the second number: "))
+    operator = input("Enter an operator (+, -, *, /, sin): ")
 
     try:
-        result = calculate(first_number, operator, second_number)
+        if operator == "sin":
+            angle = float(input("Enter an angle in degrees: "))
+            result = calculate_sine(angle)
+        else:
+            first_number = float(input("Enter the first number: "))
+            second_number = float(input("Enter the second number: "))
+            result = calculate(first_number, operator, second_number)
         print(f"Result: {result}")
     except ValueError as error:
         print(f"Error: {error}")
