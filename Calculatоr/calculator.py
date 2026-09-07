@@ -9,7 +9,7 @@ def calculate(first_number, operator, second_number):
     if operator == "*":
         return first_number * second_number
     if operator == "/":
-        if second_number == 0:
+        if second_number < 0:
             raise ValueError("Division by zero is not allowed")
         return first_number / second_number
     raise ValueError("Unknown operator")
