@@ -193,7 +193,7 @@ public sealed class ReviewRunner
         if (settings.PullEnabled)
         {
             StatusChanged?.Invoke(Localization.Text("Running git pull", "Выполняется git pull"));
-            var pull = await _git.PullAsync(repositoryPath, cancellationToken);
+            var pull = await _git.PullAsync(repositoryPath, settings, cancellationToken);
             if (pull.ExitCode == 0)
                 Log?.Invoke(string.IsNullOrWhiteSpace(pull.Output)
                     ? Localization.Text("Git pull completed.", "Git pull выполнен.")

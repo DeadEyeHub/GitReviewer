@@ -56,8 +56,61 @@ public sealed class GitService
         return result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty;
     }
 
-    public Task<GitResult> PullAsync(string repositoryPath, CancellationToken cancellationToken) =>
-        RunAsync(repositoryPath, cancellationToken, "pull", "--ff-only");
+    public async Task<GitResult> PullAsync(
+        string repositoryPath,
+        AppSettings settings,
+        CancellationToken cancellationToken)
+    {
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken);
+        if (remote is not null && remote.Value.Url != ".")
+            ValidateRemoteForAuthenticationMode(remote.Value.Url, settings.GitAuthenticationMode);
+        return await RunWithAuthenticationAsync(
+            repositoryPath, settings, cancellationToken, "pull", "--ff-only");
+    }
+
+    public async Task TestRemoteAccessAsync(
+        string repositoryPath,
+        AppSettings settings,
+        CancellationToken cancellationToken)
+    {
+        await ValidateRepositoryAsync(repositoryPath, cancellationToken);
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken)
+            ?? throw new GitException(Localization.Text(
+                "The current branch does not track a remote branch.",
+                "Текущая ветка не отслеживает удаленную ветку."));
+        if (remote.Url != ".")
+            ValidateRemoteForAuthenticationMode(remote.Url, settings.GitAuthenticationMode);
+
+        var result = await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+            "ls-remote", "--exit-code", remote.Name, remote.MergeReference);
+        if (result.ExitCode != 0)
+            throw new GitException(result.Error.Length > 0
+                ? result.Error.Trim()
+                : Localization.Text(
+                    "Could not access the remote repository.",
+                    "Не удалось получить доступ к удаленному репозиторию."));
+    }
+
+    public async Task<string> DetectAuthenticationModeAsync(
+        string repositoryPath,
+        CancellationToken cancellationToken)
+    {
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken);
+        if (remote is null)
+        {
+            var origin = await RunAsync(repositoryPath, cancellationToken,
+                "remote", "get-url", "origin");
+            if (origin.ExitCode != 0)
+                return "ssh-agent";
+            return origin.Output.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                ? "https"
+                : "ssh-agent";
+        }
+
+        return remote.Value.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? "https"
+            : "ssh-agent";
+    }
 
     public async Task<bool> IsAncestorAsync(
         string repositoryPath,
@@ -135,6 +188,20 @@ public sealed class GitService
         string repositoryPath,
         CancellationToken cancellationToken,
         params string[] arguments)
+        => await RunCoreAsync(repositoryPath, null, cancellationToken, arguments);
+
+    private static async Task<GitResult> RunWithAuthenticationAsync(
+        string repositoryPath,
+        AppSettings settings,
+        CancellationToken cancellationToken,
+        params string[] arguments)
+        => await RunCoreAsync(repositoryPath, settings, cancellationToken, arguments);
+
+    private static async Task<GitResult> RunCoreAsync(
+        string repositoryPath,
+        AppSettings? settings,
+        CancellationToken cancellationToken,
+        params string[] arguments)
     {
         var startInfo = new ProcessStartInfo("git")
         {
@@ -145,6 +212,8 @@ public sealed class GitService
             CreateNoWindow = true
         };
         startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (settings is not null)
+            ApplyAuthentication(startInfo, settings);
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
@@ -175,6 +244,114 @@ public sealed class GitService
                 process.Kill(true);
             throw;
         }
+    }
+
+    private static void ApplyAuthentication(ProcessStartInfo startInfo, AppSettings settings)
+    {
+        if (settings.GitAuthenticationMode == "https")
+            return;
+
+        var sshExecutable = "ssh";
+        if (settings.GitAuthenticationMode == "ssh-agent")
+        {
+            var windowsDirectory = Environment.GetEnvironmentVariable("WINDIR") ?? @"C:\Windows";
+            var windowsSsh = Path.Combine(windowsDirectory, "System32", "OpenSSH", "ssh.exe");
+            if (!File.Exists(windowsSsh))
+                throw new GitException(Localization.Text(
+                    "Windows OpenSSH Client is not installed. Install it or select another authentication mode.",
+                    "Клиент Windows OpenSSH не установлен. Установите его или выберите другой режим аутентификации."));
+            sshExecutable = QuoteForShell(windowsSsh.Replace('\\', '/'));
+        }
+
+        var sshCommand = $"{sshExecutable} -o BatchMode=yes -o StrictHostKeyChecking=yes";
+        if (settings.GitAuthenticationMode == "ssh-key")
+        {
+            if (string.IsNullOrWhiteSpace(settings.SshPrivateKeyPath))
+                throw new GitException(Localization.Text(
+                    "Select an SSH private key file.",
+                    "Выберите файл приватного SSH-ключа."));
+            var keyPath = Path.GetFullPath(settings.SshPrivateKeyPath);
+            if (!File.Exists(keyPath))
+                throw new GitException(Localization.Format(
+                    "SSH private key not found: {0}",
+                    "Файл приватного SSH-ключа не найден: {0}",
+                    keyPath));
+            if (keyPath.IndexOfAny(['\r', '\n', '\0']) >= 0)
+                throw new GitException(Localization.Text(
+                    "The SSH private key path contains invalid characters.",
+                    "Путь к приватному SSH-ключу содержит недопустимые символы."));
+
+            sshCommand += $" -i {QuoteForShell(keyPath.Replace('\\', '/'))} -o IdentitiesOnly=yes";
+        }
+
+        startInfo.Environment["GIT_SSH_COMMAND"] = sshCommand;
+        startInfo.Environment["GIT_SSH_VARIANT"] = "ssh";
+    }
+
+    private async Task<(string Name, string Url, string MergeReference)?> TryGetUpstreamRemoteAsync(
+        string repositoryPath,
+        CancellationToken cancellationToken)
+    {
+        var branchResult = await RunAsync(repositoryPath, cancellationToken,
+            "branch", "--show-current");
+        var branch = branchResult.Output.Trim();
+        if (branchResult.ExitCode != 0 || branch.Length == 0)
+            return null;
+
+        var remoteResult = await RunAsync(repositoryPath, cancellationToken,
+            "config", "--get", $"branch.{branch}.remote");
+        var remoteName = remoteResult.Output.Trim();
+        if (remoteResult.ExitCode != 0 || remoteName.Length == 0)
+            return null;
+        var mergeResult = await RunAsync(repositoryPath, cancellationToken,
+            "config", "--get", $"branch.{branch}.merge");
+        var mergeReference = mergeResult.Output.Trim();
+        if (mergeResult.ExitCode != 0 || mergeReference.Length == 0)
+            return null;
+        if (remoteName == ".")
+            return (remoteName, ".", mergeReference);
+
+        var urlResult = await RunAsync(repositoryPath, cancellationToken,
+            "remote", "get-url", remoteName);
+        if (urlResult.ExitCode != 0 || string.IsNullOrWhiteSpace(urlResult.Output))
+            return null;
+        return (remoteName, urlResult.Output.Trim(), mergeReference);
+    }
+
+    private static string QuoteForShell(string value) =>
+        "'" + value.Replace("'", "'\"'\"'") + "'";
+
+    private static void ValidateRemoteForAuthenticationMode(string remoteUrl, string mode)
+    {
+        if (mode == "https" && !remoteUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            throw new GitException(Localization.Text(
+                "HTTPS authentication requires an origin URL that starts with https://.",
+                "Для HTTPS-аутентификации адрес origin должен начинаться с https://."));
+        if (mode != "https" && remoteUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            throw new GitException(Localization.Text(
+                "SSH authentication requires an SSH origin URL, for example git@github.com:user/repository.git.",
+                "Для SSH-аутентификации нужен SSH-адрес origin, например git@github.com:user/repository.git."));
+        if (mode != "https" && !IsSshRemote(remoteUrl))
+            throw new GitException(Localization.Text(
+                "The upstream remote does not use a supported SSH URL.",
+                "Upstream remote не использует поддерживаемый SSH-адрес."));
+    }
+
+    private static bool IsSshRemote(string remoteUrl)
+    {
+        if (remoteUrl.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (remoteUrl.Contains("://", StringComparison.Ordinal))
+            return false;
+        var at = remoteUrl.IndexOf('@');
+        var hostStart = at >= 0 ? at + 1 : 0;
+        var colon = remoteUrl.IndexOf(':', hostStart);
+        var hostLength = colon - hostStart;
+        return colon > hostStart && colon < remoteUrl.Length - 1 &&
+               hostLength > 1 &&
+               !remoteUrl[..colon].Contains('/') &&
+               !remoteUrl[..colon].Contains('\\') &&
+               !remoteUrl.Any(char.IsWhiteSpace);
     }
 }
 

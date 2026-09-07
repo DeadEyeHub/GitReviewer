@@ -8,6 +8,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Reviews the current `HEAD` on the first connection without scanning older commits.
 - Runs `git pull --ff-only` and reviews each newly received commit separately.
 - Supports local-only repositories with automatic pull disabled.
+- Supports private remotes through SSH Agent, an SSH private key file, or HTTPS credentials.
 - Reviews added, modified, and deleted lines from each commit diff.
 - Allows manual review of any commit by its short or full SHA.
 - Supports multiple model profiles for OpenAI-compatible APIs, Ollama, and LM Studio.
@@ -57,6 +58,43 @@ option for a repository that exists only locally.
 
 The application does not clone repositories. Select an existing local Git
 working directory, with or without a configured remote.
+
+## Repository Authentication
+
+The **Project** tab provides three authentication modes:
+
+- **SSH Agent** uses keys already loaded into Windows OpenSSH Agent. This is the
+  recommended mode for private keys protected by a passphrase.
+- **SSH Key File** passes the selected private key file to OpenSSH. Only the
+  path is stored in `settings.conf`; the key is not copied. Add the matching
+  public key to the Git server. Use SSH Agent for an encrypted key.
+- **HTTPS** uses credentials already stored by Git Credential Manager. GitHub
+  requires a personal access token instead of an account password.
+
+SSH modes require an SSH remote such as:
+
+```text
+git@github.com:user/private-repository.git
+```
+
+HTTPS mode requires a remote such as:
+
+```text
+https://github.com/user/private-repository.git
+```
+
+The **Test repository access** button runs:
+
+```powershell
+git ls-remote --exit-code <upstream-remote> <tracked-branch-ref>
+```
+
+The upstream remote is read from the current branch, so the test uses the same
+remote as `git pull`. SSH Agent mode explicitly uses Windows OpenSSH Client and
+the Windows `ssh-agent` service instead of Git for Windows' bundled SSH client.
+SSH connections run non-interactively and require the server to already exist
+in the user's `known_hosts` file. The application never stores an SSH
+passphrase or an HTTPS token itself.
 
 ## Review Behavior
 
@@ -110,7 +148,7 @@ The directory contains:
 
 ```text
 models.conf          Model profiles and optional API keys
-settings.conf        Repository path, interval, pull option, and language
+settings.conf        Repository, authentication, interval, pull, and language
 system-prompt.txt    Editable system prompt
 state.json           Last reviewed commit for each repository and branch
 reports\             Markdown review reports

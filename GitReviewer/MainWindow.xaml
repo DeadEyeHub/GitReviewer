@@ -12,6 +12,7 @@
 
         <TabControl x:Name="MainTabs">
             <TabItem x:Name="ProjectTab" Header="Project">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <Grid Margin="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="180" />
@@ -19,6 +20,9 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -55,20 +59,43 @@
                     <TextBlock x:Name="RemoteTextBlock" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
                                Margin="0,7,0,12" TextWrapping="Wrap" Text="-" />
 
-                    <TextBlock x:Name="LanguageLabel" Grid.Row="5" Grid.Column="0" Margin="0,7,12,12" Text="Language" />
-                    <ComboBox x:Name="LanguageComboBox" Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2"
+                    <TextBlock x:Name="AuthenticationLabel" Grid.Row="5" Grid.Column="0" Margin="0,7,12,12" Text="Authentication" />
+                    <StackPanel Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12">
+                        <ComboBox x:Name="AuthenticationComboBox" Width="220" HorizontalAlignment="Left"
+                                  SelectionChanged="AuthenticationComboBox_SelectionChanged" />
+                        <TextBlock x:Name="AuthenticationHelpTextBlock" Margin="0,5,0,0" Foreground="#666"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="SshKeyLabel" Grid.Row="6" Grid.Column="0" Margin="0,7,12,12" Text="SSH private key" />
+                    <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBox x:Name="SshKeyPathTextBox" Width="430" Margin="0,0,8,0" VerticalContentAlignment="Center"
+                                 LostKeyboardFocus="SshKeyPathTextBox_LostKeyboardFocus" />
+                        <Button x:Name="BrowseSshKeyButton" Padding="16,6" Content="Browse..." Click="BrowseSshKey_Click" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="RemoteAccessLabel" Grid.Row="7" Grid.Column="0" Margin="0,7,12,12" Text="Remote access" />
+                    <StackPanel Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12">
+                        <Button x:Name="TestRemoteButton" Width="180" HorizontalAlignment="Left" Padding="16,6"
+                                Content="Test repository access" Click="TestRemote_Click" />
+                        <TextBlock x:Name="RemoteAccessStatusTextBlock" Margin="0,5,0,0" Foreground="#444" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="LanguageLabel" Grid.Row="8" Grid.Column="0" Margin="0,7,12,12" Text="Language" />
+                    <ComboBox x:Name="LanguageComboBox" Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2"
                               Width="180" HorizontalAlignment="Left" Margin="0,0,0,12"
                               SelectionChanged="LanguageComboBox_SelectionChanged" />
 
-                    <TextBlock x:Name="SelectedCommitLabel" Grid.Row="6" Grid.Column="0" Margin="0,7,12,12"
+                    <TextBlock x:Name="SelectedCommitLabel" Grid.Row="9" Grid.Column="0" Margin="0,7,12,12"
                                Text="Review selected commit" />
-                    <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
+                    <StackPanel Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
                         <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
                                  VerticalContentAlignment="Center" ToolTip="Enter a short or full commit SHA" />
                         <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
                                 Click="ReviewCommit_Click" />
                     </StackPanel>
                 </Grid>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem x:Name="ModelsTab" Header="Models">

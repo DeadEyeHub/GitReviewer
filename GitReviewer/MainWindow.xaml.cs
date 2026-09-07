@@ -28,6 +28,8 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _manualReviewCancellation;
     private Task? _manualReviewTask;
     private bool _loadingLanguage;
+    private bool _loadingAuthentication;
+    private bool _authenticationNeedsDetection;
     private bool _exitRequested;
 
     public MainWindow()
@@ -52,6 +54,10 @@ public partial class MainWindow : Window
             .Cast<LanguageOption>()
             .First(option => option.Code == Localization.Language);
         _loadingLanguage = false;
+        _authenticationNeedsDetection = settings.GitAuthenticationMode == "auto";
+        LoadAuthenticationOptions(_authenticationNeedsDetection
+            ? "ssh-agent"
+            : settings.GitAuthenticationMode);
 
         _models = _configuration.LoadModels();
         LoadSettings(settings);
@@ -111,6 +117,7 @@ public partial class MainWindow : Window
         RepositoryPathTextBox.Text = settings.RepositoryPath;
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
+        SshKeyPathTextBox.Text = settings.SshPrivateKeyPath;
         if (settings.RepositoryPath.Length > 0)
             _ = RefreshRepositoryInfoAsync();
     }
@@ -153,6 +160,12 @@ public partial class MainWindow : Window
             "Enter a short or full commit SHA",
             "Введите короткий или полный SHA коммита");
         ReviewCommitButton.Content = Localization.Text("Review commit", "Проверить коммит");
+        AuthenticationLabel.Text = Localization.Text("Authentication", "Аутентификация");
+        SshKeyLabel.Text = Localization.Text("SSH private key", "Приватный SSH-ключ");
+        BrowseSshKeyButton.Content = Localization.Text("Browse...", "Обзор...");
+        RemoteAccessLabel.Text = Localization.Text("Remote access", "Доступ к remote");
+        TestRemoteButton.Content = Localization.Text("Test repository access", "Проверить доступ");
+        LoadAuthenticationOptions(GetAuthenticationMode());
 
         ActiveProfileLabel.Text = Localization.Text("Active profile", "Активный профиль");
         ProfileNameLabel.Text = Localization.Text("Profile name", "Название профиля");
@@ -183,6 +196,117 @@ public partial class MainWindow : Window
         SetStatus(_runner.IsRunning
             ? Localization.Text("Running", "Работает")
             : Localization.Text("Stopped", "Остановлено"));
+    }
+
+    private void LoadAuthenticationOptions(string selectedMode)
+    {
+        _loadingAuthentication = true;
+        var options = new[]
+        {
+            new AuthenticationOption("ssh-agent", "SSH Agent"),
+            new AuthenticationOption(
+                "ssh-key",
+                Localization.Text("SSH Key File", "SSH-ключ из файла")),
+            new AuthenticationOption("https", "HTTPS")
+        };
+        AuthenticationComboBox.ItemsSource = options;
+        AuthenticationComboBox.SelectedItem = options.FirstOrDefault(option => option.Code == selectedMode)
+            ?? options[0];
+        _loadingAuthentication = false;
+        UpdateAuthenticationControls();
+    }
+
+    private void AuthenticationComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loadingAuthentication)
+        {
+            _authenticationNeedsDetection = false;
+            UpdateAuthenticationControls();
+            SaveAuthenticationPreferences();
+        }
+    }
+
+    private void UpdateAuthenticationControls()
+    {
+        var mode = GetAuthenticationMode();
+        var usesKeyFile = mode == "ssh-key";
+        SshKeyPathTextBox.IsEnabled = usesKeyFile;
+        BrowseSshKeyButton.IsEnabled = usesKeyFile;
+        AuthenticationHelpTextBlock.Text = mode switch
+        {
+            "ssh-key" => Localization.Text(
+                "Select a private key file. Add its public key to the Git server. Use SSH Agent if the key has a passphrase.",
+                "Выберите файл приватного ключа. Добавьте публичный ключ на Git-сервер. Для ключа с паролем используйте SSH Agent."),
+            "https" => Localization.Text(
+                "Uses credentials already stored by Git Credential Manager. The origin URL must start with https://.",
+                "Используются учетные данные из Git Credential Manager. Адрес origin должен начинаться с https://."),
+            _ => Localization.Text(
+                "Uses keys loaded into Windows OpenSSH Agent. The origin must use an SSH URL.",
+                "Используются ключи, загруженные в Windows OpenSSH Agent. Для origin нужен SSH-адрес.")
+        };
+    }
+
+    private string GetAuthenticationMode() =>
+        (AuthenticationComboBox.SelectedItem as AuthenticationOption)?.Code ?? "ssh-agent";
+
+    private void BrowseSshKey_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Localization.Text("Select an SSH private key", "Выберите приватный SSH-ключ"),
+            Filter = Localization.Text(
+                "SSH private keys|id_*;*.pem;*.key|All files|*.*",
+                "Приватные SSH-ключи|id_*;*.pem;*.key|Все файлы|*.*")
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            SshKeyPathTextBox.Text = dialog.FileName;
+            SaveAuthenticationPreferences();
+        }
+    }
+
+    private void SshKeyPathTextBox_LostKeyboardFocus(
+        object sender,
+        System.Windows.Input.KeyboardFocusChangedEventArgs e) =>
+        SaveAuthenticationPreferences();
+
+    private void SaveAuthenticationPreferences()
+    {
+        if (_loadingAuthentication)
+            return;
+        var settings = _configuration.LoadSettings();
+        settings.GitAuthenticationMode = GetAuthenticationMode();
+        settings.SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim();
+        _configuration.SaveSettings(settings);
+    }
+
+    private async void TestRemote_Click(object sender, RoutedEventArgs e)
+    {
+        TestRemoteButton.IsEnabled = false;
+        RemoteAccessStatusTextBlock.Text = Localization.Text(
+            "Testing repository access...",
+            "Проверяется доступ к репозиторию...");
+        try
+        {
+            var settings = ReadSettingsFromForm();
+            _configuration.SaveSettings(settings);
+            await _git.TestRemoteAccessAsync(
+                settings.RepositoryPath, settings, CancellationToken.None);
+            RemoteAccessStatusTextBlock.Text = Localization.Text(
+                "Repository access confirmed.",
+                "Доступ к репозиторию подтвержден.");
+        }
+        catch (Exception exception)
+        {
+            RemoteAccessStatusTextBlock.Text = Localization.Format(
+                "Repository access failed: {0}",
+                "Ошибка доступа к репозиторию: {0}",
+                exception.Message);
+        }
+        finally
+        {
+            TestRemoteButton.IsEnabled = true;
+        }
     }
 
     private void LoadProfiles(string? selectName = null)
@@ -222,6 +346,15 @@ public partial class MainWindow : Window
             RemoteTextBlock.Text = remote.Length == 0
                 ? Localization.Text("Not configured", "Не настроен")
                 : remote;
+            if (_authenticationNeedsDetection)
+            {
+                var detectedMode = await _git.DetectAuthenticationModeAsync(path, CancellationToken.None);
+                if (_authenticationNeedsDetection)
+                {
+                    LoadAuthenticationOptions(detectedMode);
+                    _authenticationNeedsDetection = false;
+                }
+            }
         }
         catch (Exception exception)
         {
@@ -478,7 +611,9 @@ public partial class MainWindow : Window
             RepositoryPath = Path.GetFullPath(path),
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
-            Language = Localization.Language
+            Language = Localization.Language,
+            GitAuthenticationMode = GetAuthenticationMode(),
+            SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim()
         };
     }
 
@@ -586,6 +721,11 @@ public partial class MainWindow : Window
         message, "Git Reviewer", MessageBoxButton.OK, MessageBoxImage.Error);
 
     private sealed record LanguageOption(string Code, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record AuthenticationOption(string Code, string Label)
     {
         public override string ToString() => Label;
     }
