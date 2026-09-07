@@ -1,0 +1,168 @@
+<Window x:Class="GitReviewer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Git Reviewer" Height="720" Width="960"
+        MinHeight="620" MinWidth="820"
+        WindowStartupLocation="CenterScreen">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TabControl x:Name="MainTabs">
+            <TabItem x:Name="ProjectTab" Header="Project">
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="180" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock x:Name="ProjectFolderLabel" Grid.Row="0" Grid.Column="0" Margin="0,7,12,12" Text="Project folder" />
+                    <TextBox x:Name="RepositoryPathTextBox" Grid.Row="0" Grid.Column="1" Margin="0,0,8,12"
+                             VerticalContentAlignment="Center" />
+                    <Button x:Name="BrowseButton" Grid.Row="0" Grid.Column="2" Margin="0,0,0,12" Padding="18,6"
+                            Content="Browse..." Click="BrowseRepository_Click" />
+
+                    <TextBlock x:Name="IntervalLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Interval, seconds" />
+                    <TextBox x:Name="IntervalTextBox" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                             Width="120" HorizontalAlignment="Left" Margin="0,0,0,12"
+                             VerticalContentAlignment="Center" />
+
+                    <TextBlock x:Name="ReceiveChangesLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Receive changes" />
+                    <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,7,0,12">
+                        <CheckBox x:Name="PullEnabledCheckBox" Content="Run git pull --ff-only before each check" />
+                        <TextBlock x:Name="PullExplanationTextBlock" Margin="0,5,0,0" Foreground="#666" TextWrapping="Wrap"
+                                   Text="Enable this for a clone that tracks a remote branch. It downloads new commits into the selected folder without creating merge commits. Disable it for a local-only repository." />
+                    </StackPanel>
+
+                    <TextBlock x:Name="CurrentBranchLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Current branch" />
+                    <TextBlock x:Name="BranchTextBlock" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
+                               Margin="0,7,0,12" FontFamily="Consolas" Text="-" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,7,12,12" Text="Remote" />
+                    <TextBlock x:Name="RemoteTextBlock" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
+                               Margin="0,7,0,12" TextWrapping="Wrap" Text="-" />
+
+                    <TextBlock x:Name="LanguageLabel" Grid.Row="5" Grid.Column="0" Margin="0,7,12,12" Text="Language" />
+                    <ComboBox x:Name="LanguageComboBox" Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2"
+                              Width="180" HorizontalAlignment="Left" Margin="0,0,0,12"
+                              SelectionChanged="LanguageComboBox_SelectionChanged" />
+
+                    <TextBlock x:Name="SelectedCommitLabel" Grid.Row="6" Grid.Column="0" Margin="0,7,12,12"
+                               Text="Review selected commit" />
+                    <StackPanel Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
+                        <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
+                                 VerticalContentAlignment="Center" ToolTip="Enter a short or full commit SHA" />
+                        <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
+                                Click="ReviewCommit_Click" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="ModelsTab" Header="Models">
+                <Grid Margin="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="180" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock x:Name="ActiveProfileLabel" Grid.Row="0" Grid.Column="0" Margin="0,7,12,12" Text="Active profile" />
+                    <ComboBox x:Name="ProfilesComboBox" Grid.Row="0" Grid.Column="1" Margin="0,0,0,12"
+                              SelectionChanged="ProfilesComboBox_SelectionChanged" />
+
+                    <TextBlock x:Name="ProfileNameLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Profile name" />
+                    <TextBox x:Name="ProfileNameTextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,0,12" />
+
+                    <TextBlock x:Name="EndpointLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Endpoint" />
+                    <TextBox x:Name="EndpointTextBox" Grid.Row="2" Grid.Column="1" Margin="0,0,0,12" />
+
+                    <TextBlock x:Name="ModelLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Model" />
+                    <TextBox x:Name="ModelNameTextBox" Grid.Row="3" Grid.Column="1" Margin="0,0,0,12" />
+
+                    <TextBlock x:Name="ApiKeyLabel" Grid.Row="4" Grid.Column="0" Margin="0,7,12,12" Text="API key" />
+                    <PasswordBox x:Name="ApiKeyPasswordBox" Grid.Row="4" Grid.Column="1" Margin="0,0,0,12" />
+
+                    <TextBlock x:Name="ApiKeyEnvironmentLabel" Grid.Row="5" Grid.Column="0" Margin="0,7,12,12" Text="API key environment variable" />
+                    <TextBox x:Name="ApiKeyEnvironmentTextBox" Grid.Row="5" Grid.Column="1" Margin="0,0,0,12" />
+
+                    <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,12">
+                        <Button x:Name="AddProfileButton" Padding="16,6" Margin="0,0,8,0" Content="Add" Click="AddProfile_Click" />
+                        <Button x:Name="SaveProfileButton" Padding="16,6" Margin="0,0,8,0" Content="Save" Click="SaveProfile_Click" />
+                        <Button x:Name="DeleteProfileButton" Padding="16,6" Margin="0,0,8,0" Content="Delete" Click="DeleteProfile_Click" />
+                        <Button x:Name="TestModelButton" Padding="16,6" Content="Test connection"
+                                Click="TestModel_Click" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="ModelStatusTextBlock" Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2"
+                               TextWrapping="Wrap" Foreground="#444" />
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="PromptTab" Header="System prompt">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBox x:Name="PromptTextBox" Grid.Row="0" AcceptsReturn="True" AcceptsTab="True"
+                             FontFamily="Consolas" FontSize="14" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button x:Name="SavePromptButton" Padding="16,6" Margin="0,0,8,0" Content="Save" Click="SavePrompt_Click" />
+                        <Button x:Name="ReloadPromptButton" Padding="16,6" Margin="0,0,8,0" Content="Reload" Click="ReloadPrompt_Click" />
+                        <Button x:Name="RestorePromptButton" Padding="16,6" Content="Restore default" Click="RestorePrompt_Click" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="LogTab" Header="Log">
+                <Grid Margin="16">
+                    <TextBox x:Name="LogTextBox" IsReadOnly="True" FontFamily="Consolas"
+                             TextWrapping="Wrap" AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto" />
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Border Grid.Row="1" BorderBrush="#D0D0D0" BorderThickness="0,1,0,0" Margin="0,14,0,0" Padding="0,14,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
+                    <TextBlock Margin="0,4,0,0"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="StartButton" Padding="18,7" Margin="0,0,8,0" Content="Start" Click="Start_Click" />
+                    <Button x:Name="StopButton" Padding="18,7" Margin="0,0,8,0" Content="Stop" IsEnabled="False" Click="Stop_Click" />
+                    <Button x:Name="OpenReportButton" Padding="18,7" Margin="0,0,8,0" Content="Open report" Click="OpenReport_Click" />
+                    <Button x:Name="HideToTrayButton" Padding="18,7" Content="Hide to tray" Click="HideToTray_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
