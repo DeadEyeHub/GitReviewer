@@ -35,6 +35,8 @@ public partial class MainWindow : Window
     private bool _loadingAuthentication;
     private bool _authenticationNeedsDetection;
     private bool _exitRequested;
+    private int _modelRequestVersion;
+    private IReadOnlyList<ModelClient.AvailableModel> _availableModels = [];
 
     public MainWindow()
     {
@@ -184,6 +186,11 @@ public partial class MainWindow : Window
         SaveProfileButton.Content = Localization.Text("Save", "Сохранить");
         DeleteProfileButton.Content = Localization.Text("Delete", "Удалить");
         TestModelButton.Content = Localization.Text("Test connection", "Проверить подключение");
+        LoadModelsButton.Content = Localization.Text("Load models", "Загрузить модели");
+        EndpointHelpTextBlock.Text = Localization.Text(
+            "Use a /v1 base URL, /v1/models, or a full /chat/completions URL. API key is optional.",
+            "Укажите базовый URL /v1, /v1/models или полный URL /chat/completions. API-ключ необязателен.");
+        UpdateModelLength();
         UpdateModelEndpointWarning();
         SavePromptButton.Content = Localization.Text("Save", "Сохранить");
         ReloadPromptButton.Content = Localization.Text("Reload", "Перечитать");
@@ -289,8 +296,73 @@ public partial class MainWindow : Window
         }
     }
 
-    private void EndpointTextBox_TextChanged(object sender, TextChangedEventArgs e) =>
+    private void EndpointTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        ModelConnection_Changed(sender, e);
         UpdateModelEndpointWarning();
+    }
+
+    private void ModelConnection_Changed(object sender, RoutedEventArgs e)
+    {
+        _modelRequestVersion++;
+        _availableModels = [];
+        if (ModelNameComboBox is null || ModelStatusTextBlock is null)
+            return;
+        var text = ModelNameComboBox.Text;
+        ModelNameComboBox.ItemsSource = null;
+        ModelNameComboBox.Text = text;
+        ModelStatusTextBlock.Text = string.Empty;
+        UpdateModelLength();
+    }
+
+    private void ModelName_Changed(object sender, TextChangedEventArgs e)
+    {
+        _modelRequestVersion++;
+        if (ModelStatusTextBlock is not null)
+            ModelStatusTextBlock.Text = string.Empty;
+        UpdateModelLength();
+    }
+
+    private void UpdateModelLength()
+    {
+        if (ModelLengthTextBlock is null)
+            return;
+        var length = _availableModels.FirstOrDefault(model => model.Id == ModelNameComboBox.Text.Trim())?.MaxModelLength;
+        ModelLengthTextBlock.Text = length is null ? string.Empty : Localization.Format(
+            "Server context limit (max_model_len): {0} tokens. Informational only.",
+            "Лимит контекста сервера (max_model_len): {0} токенов. Только для информации.", length);
+    }
+
+    private async void LoadModels_Click(object sender, RoutedEventArgs e)
+    {
+        var version = ++_modelRequestVersion;
+        LoadModelsButton.IsEnabled = false;
+        ModelStatusTextBlock.Text = Localization.Text("Loading models...", "Загрузка моделей...");
+        try
+        {
+            var models = await _model.DiscoverModelsAsync(ReadProfileFromForm(false), CancellationToken.None);
+            if (version != _modelRequestVersion || _exitRequested)
+                return;
+            var text = ModelNameComboBox.Text;
+            _availableModels = models;
+            ModelNameComboBox.ItemsSource = models.Select(model => model.Id).ToList();
+            ModelNameComboBox.Text = text;
+            UpdateModelLength();
+            ModelStatusTextBlock.Text = models.Count == 0
+                ? Localization.Text("No models returned. You can enter a model manually.", "Список моделей пуст. Можно ввести модель вручную.")
+                : Localization.Format("Loaded {0} models. Select one or enter a name.", "Загружено моделей: {0}. Выберите модель или введите название.", models.Count);
+        }
+        catch (Exception exception)
+        {
+            if (version == _modelRequestVersion && !_exitRequested)
+                ModelStatusTextBlock.Text = Localization.Format(
+                    "Model discovery failed: {0}", "Не удалось загрузить модели: {0}", exception.Message);
+        }
+        finally
+        {
+            LoadModelsButton.IsEnabled = true;
+        }
+    }
 
     private void UpdateModelEndpointWarning()
     {
@@ -406,6 +478,7 @@ public partial class MainWindow : Window
 
     private void ProfilesComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        ModelConnection_Changed(sender, e);
         if (ProfilesComboBox.SelectedItem is not string name)
             return;
         var profile = _models.Profiles.FirstOrDefault(item => item.Name == name);
@@ -413,7 +486,7 @@ public partial class MainWindow : Window
             return;
         ProfileNameTextBox.Text = profile.Name;
         EndpointTextBox.Text = profile.Endpoint;
-        ModelNameTextBox.Text = profile.Model;
+        ModelNameComboBox.Text = profile.Model;
         ApiKeyPasswordBox.Password = profile.ApiKey;
         ApiKeyEnvironmentTextBox.Text = profile.ApiKeyEnvironment;
         _models.ActiveProfile = profile.Name;
@@ -424,7 +497,7 @@ public partial class MainWindow : Window
         ProfilesComboBox.SelectedItem = null;
         ProfileNameTextBox.Clear();
         EndpointTextBox.Clear();
-        ModelNameTextBox.Clear();
+        ModelNameComboBox.Text = string.Empty;
         ApiKeyPasswordBox.Clear();
         ApiKeyEnvironmentTextBox.Clear();
         ProfileNameTextBox.Focus();
@@ -484,18 +557,22 @@ public partial class MainWindow : Window
 
     private async void TestModel_Click(object sender, RoutedEventArgs e)
     {
+        var version = ++_modelRequestVersion;
         TestModelButton.IsEnabled = false;
         ModelStatusTextBlock.Text = Localization.Text(
             "Testing connection...",
             "Проверяется подключение...");
         try
         {
-            ModelStatusTextBlock.Text = await _model.TestConnectionAsync(
+            var status = await _model.TestConnectionAsync(
                 ReadProfileFromForm(), CancellationToken.None);
+            if (version == _modelRequestVersion && !_exitRequested)
+                ModelStatusTextBlock.Text = status;
         }
         catch (Exception exception)
         {
-            ModelStatusTextBlock.Text = Localization.Format(
+            if (version == _modelRequestVersion && !_exitRequested)
+                ModelStatusTextBlock.Text = Localization.Format(
                 "Connection error: {0}",
                 "Ошибка подключения: {0}",
                 exception.Message);
@@ -506,10 +583,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private ModelProfile ReadProfileFromForm()
+    private ModelProfile ReadProfileFromForm(bool requireName = true)
     {
         var name = ProfileNameTextBox.Text.Trim();
-        if (name.Length == 0)
+        if (requireName && name.Length == 0)
             throw new InvalidOperationException(Localization.Text(
                 "Enter a profile name.",
                 "Укажите название профиля."));
@@ -522,7 +599,7 @@ public partial class MainWindow : Window
         {
             Name = name,
             Endpoint = EndpointTextBox.Text.Trim(),
-            Model = ModelNameTextBox.Text.Trim(),
+            Model = ModelNameComboBox.Text.Trim(),
             ApiKey = ApiKeyPasswordBox.Password.Trim(),
             ApiKeyEnvironment = ApiKeyEnvironmentTextBox.Text.Trim()
         };

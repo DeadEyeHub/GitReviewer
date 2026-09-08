@@ -9,7 +9,50 @@ namespace GitReviewer.Services;
 
 public sealed class ModelClient
 {
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
+    private readonly HttpClient _httpClient;
+
+    public ModelClient(HttpClient? httpClient = null) =>
+        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+
+    public sealed record AvailableModel(string Id, long? MaxModelLength);
+
+    public async Task<IReadOnlyList<AvailableModel>> DiscoverModelsAsync(
+        ModelProfile profile, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, ResolveEndpoint(profile.Endpoint, true));
+        var apiKey = ResolveApiKey(profile);
+        if (apiKey.Length > 0)
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(Localization.Format(
+                "API returned {0}: {1}", "API вернул {0}: {1}",
+                (int)response.StatusCode, body[..Math.Min(body.Length, 1000)]));
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var models = new List<AvailableModel>();
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in document.RootElement.GetProperty("data").EnumerateArray())
+            {
+                var id = item.GetProperty("id").GetString();
+                if (string.IsNullOrWhiteSpace(id) || !ids.Add(id))
+                    continue;
+                long? maxLength = item.TryGetProperty("max_model_len", out var length) &&
+                                  length.ValueKind == JsonValueKind.Number &&
+                                  length.TryGetInt64(out var value) && value > 0 ? value : null;
+                models.Add(new AvailableModel(id, maxLength));
+            }
+            return models;
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException)
+        {
+            throw new InvalidDataException(Localization.Text(
+                "The API returned an unsupported model list format.",
+                "API вернул список моделей неподдерживаемого формата."), exception);
+        }
+    }
 
     public async Task<string> TestConnectionAsync(ModelProfile profile, CancellationToken cancellationToken)
     {
@@ -90,7 +133,7 @@ public sealed class ModelClient
             }
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, profile.Endpoint)
+        using var request = new HttpRequestMessage(HttpMethod.Post, ResolveEndpoint(profile.Endpoint))
         {
             Content = JsonContent.Create(payload)
         };
@@ -141,7 +184,16 @@ public sealed class ModelClient
 
     private static void ValidateProfile(ModelProfile profile)
     {
-        if (profile.Endpoint.Length == 0 || !Uri.TryCreate(profile.Endpoint, UriKind.Absolute, out var endpoint))
+        ResolveEndpoint(profile.Endpoint);
+        if (string.IsNullOrWhiteSpace(profile.Model))
+            throw new InvalidOperationException(Localization.Text(
+                "Enter a model name.",
+                "Укажите название модели."));
+    }
+
+    public static Uri ResolveEndpoint(string text, bool models = false)
+    {
+        if (!Uri.TryCreate(text.Trim(), UriKind.Absolute, out var endpoint))
             throw new InvalidOperationException(Localization.Text(
                 "Enter a valid model endpoint.",
                 "Укажите корректный endpoint модели."));
@@ -149,10 +201,25 @@ public sealed class ModelClient
             throw new InvalidOperationException(Localization.Text(
                 "The model endpoint must use HTTP or HTTPS.",
                 "Endpoint модели должен использовать HTTP или HTTPS."));
-        if (profile.Model.Length == 0)
+        var path = endpoint.AbsolutePath.TrimEnd('/');
+        string basePath;
+        if (path.EndsWith("/chat/completions", StringComparison.Ordinal))
+            basePath = path[..^"/chat/completions".Length];
+        else if (path.EndsWith("/v1/models", StringComparison.Ordinal))
+            basePath = path[..^"/models".Length];
+        else if (path.EndsWith("/v1", StringComparison.Ordinal))
+            basePath = path;
+        else
+        {
+            if (!models)
+                return endpoint; // Existing custom full endpoints are used verbatim.
             throw new InvalidOperationException(Localization.Text(
-                "Enter a model name.",
-                "Укажите название модели."));
+                "Model discovery requires a /v1, /v1/models, or /chat/completions endpoint. Enter the model manually for custom endpoints.",
+                "Для загрузки моделей нужен endpoint /v1, /v1/models или /chat/completions. Для нестандартных адресов введите модель вручную."));
+        }
+        if (!models && path.EndsWith("/chat/completions", StringComparison.Ordinal))
+            return endpoint;
+        return new UriBuilder(endpoint) { Path = basePath + (models ? "/models" : "/chat/completions") }.Uri;
     }
 
     private static string ResolveApiKey(ModelProfile profile)

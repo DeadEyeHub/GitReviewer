@@ -99,6 +99,7 @@
             </TabItem>
 
             <TabItem x:Name="ModelsTab" Header="Models">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <Grid Margin="16">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="180" />
@@ -120,23 +121,32 @@
                               SelectionChanged="ProfilesComboBox_SelectionChanged" />
 
                     <TextBlock x:Name="ProfileNameLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Profile name" />
-                    <TextBox x:Name="ProfileNameTextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,0,12" />
+                    <TextBox x:Name="ProfileNameTextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,0,12" TextChanged="ModelConnection_Changed" />
 
                     <TextBlock x:Name="EndpointLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Endpoint" />
                     <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
                         <TextBox x:Name="EndpointTextBox" TextChanged="EndpointTextBox_TextChanged" />
+                        <TextBlock x:Name="EndpointHelpTextBlock" Margin="0,5,0,0" Foreground="#666" TextWrapping="Wrap" />
                         <TextBlock x:Name="ModelHttpWarningTextBlock" Margin="0,5,0,0" Foreground="#A35A00"
                                    TextWrapping="Wrap" />
                     </StackPanel>
 
                     <TextBlock x:Name="ModelLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Model" />
-                    <TextBox x:Name="ModelNameTextBox" Grid.Row="3" Grid.Column="1" Margin="0,0,0,12" />
+                    <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,0,0,12">
+                        <DockPanel>
+                            <Button x:Name="LoadModelsButton" DockPanel.Dock="Right" Margin="8,0,0,0" Padding="12,4"
+                                    Content="Load models" Click="LoadModels_Click" />
+                            <ComboBox x:Name="ModelNameComboBox" IsEditable="True" IsTextSearchEnabled="False"
+                                      TextBoxBase.TextChanged="ModelName_Changed" />
+                        </DockPanel>
+                        <TextBlock x:Name="ModelLengthTextBlock" Margin="0,5,0,0" Foreground="#666" TextWrapping="Wrap" />
+                    </StackPanel>
 
                     <TextBlock x:Name="ApiKeyLabel" Grid.Row="4" Grid.Column="0" Margin="0,7,12,12" Text="API key" />
-                    <PasswordBox x:Name="ApiKeyPasswordBox" Grid.Row="4" Grid.Column="1" Margin="0,0,0,12" />
+                    <PasswordBox x:Name="ApiKeyPasswordBox" Grid.Row="4" Grid.Column="1" Margin="0,0,0,12" PasswordChanged="ModelConnection_Changed" />
 
                     <TextBlock x:Name="ApiKeyEnvironmentLabel" Grid.Row="5" Grid.Column="0" Margin="0,7,12,12" Text="API key environment variable" />
-                    <TextBox x:Name="ApiKeyEnvironmentTextBox" Grid.Row="5" Grid.Column="1" Margin="0,0,0,12" />
+                    <TextBox x:Name="ApiKeyEnvironmentTextBox" Grid.Row="5" Grid.Column="1" Margin="0,0,0,12" TextChanged="ModelConnection_Changed" />
 
                     <StackPanel Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,8,0,12">
                         <Button x:Name="AddProfileButton" Padding="16,6" Margin="0,0,8,0" Content="Add" Click="AddProfile_Click" />
@@ -149,6 +159,7 @@
                     <TextBlock x:Name="ModelStatusTextBlock" Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2"
                                TextWrapping="Wrap" Foreground="#444" />
                 </Grid>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem x:Name="PromptTab" Header="System prompt">

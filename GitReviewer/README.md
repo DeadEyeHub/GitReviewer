@@ -11,7 +11,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Reviews added, modified, and deleted lines from each commit diff.
 - Allows manual review of any commit by its short or full SHA.
-- Supports multiple model profiles for OpenAI-compatible APIs, Ollama, and LM Studio.
+- Supports multiple model profiles for OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an editable system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
 - Continues monitoring in the Windows system tray after the main window is closed.
@@ -151,6 +151,51 @@ When both are configured, `api_key_environment` takes precedence over
 Model endpoints may use HTTP or HTTPS. HTTP is useful for local networks and
 self-hosted model servers, but it does not encrypt the API key or repository
 diff. The GUI displays a warning for non-loopback HTTP endpoints.
+
+### vLLM And Model Discovery
+
+In **Models**, enter your server endpoint, then click **Load models**. No profile
+name or model is required for discovery. Select the exact served model ID from
+the editable dropdown, or type it manually if discovery is unavailable. Loading
+models never replaces your current model name. Click **Test connection** to send
+a small chat request, then **Save** to persist the profile.
+
+Supported endpoint forms (including reverse-proxy path prefixes):
+
+| Entered path | Chat POST path | Discovery GET path |
+| --- | --- | --- |
+| `/v1` or `/v1/` | `/v1/chat/completions` | `/v1/models` |
+| `/v1/models` | `/v1/chat/completions` | `/v1/models` |
+| `/v1/chat/completions` | unchanged | `/v1/models` |
+
+Query parameters are retained. Other full endpoints remain unchanged for chat
+requests; discovery can also replace a final `/chat/completions` with `/models`.
+For custom endpoints without a recognized suffix, enter the model manually.
+Use the explicit `/v1` base rather than a bare server hostname. Stored endpoint
+strings and the existing profile file format are not rewritten or migrated.
+
+Both discovery and chat use optional Bearer authentication: a nonblank value
+from the configured environment variable takes precedence, otherwise the stored
+API key is used. Leave both blank for a server that does not require authentication.
+No server address or model ID is assumed.
+
+If vLLM reports `max_model_len`, the selected model's context limit is displayed
+as information only. It is not saved, sent in chat requests, or used to change
+diff chunking or output limits. Missing metadata does not prevent model selection.
+Editing connection details or switching profiles clears discovered metadata;
+responses from requests started before form edits or newer operations are ignored.
+
+### Cross-Platform Client Checks
+
+The dependency-free .NET 10 test executable links the production client source
+and uses a fake HTTP handler (no server or credentials required):
+
+```sh
+dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
+```
+
+Run this command from `GitReviewer`. The WPF project can be built on Linux with
+`dotnet build`, but running and interactively checking the GUI requires Windows.
 
 ## User Data
 
