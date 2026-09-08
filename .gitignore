@@ -7,4 +7,10 @@ review-report.md
 reports/
 bin/
 obj/
+dist/
+GitReviewer.Tests/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
 Calculatоr/
