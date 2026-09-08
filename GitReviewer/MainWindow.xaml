@@ -123,7 +123,11 @@
                     <TextBox x:Name="ProfileNameTextBox" Grid.Row="1" Grid.Column="1" Margin="0,0,0,12" />
 
                     <TextBlock x:Name="EndpointLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Endpoint" />
-                    <TextBox x:Name="EndpointTextBox" Grid.Row="2" Grid.Column="1" Margin="0,0,0,12" />
+                    <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
+                        <TextBox x:Name="EndpointTextBox" TextChanged="EndpointTextBox_TextChanged" />
+                        <TextBlock x:Name="ModelHttpWarningTextBlock" Margin="0,5,0,0" Foreground="#A35A00"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
 
                     <TextBlock x:Name="ModelLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Model" />
                     <TextBox x:Name="ModelNameTextBox" Grid.Row="3" Grid.Column="1" Margin="0,0,0,12" />

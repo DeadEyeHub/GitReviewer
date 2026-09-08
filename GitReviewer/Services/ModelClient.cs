@@ -145,11 +145,10 @@ public sealed class ModelClient
             throw new InvalidOperationException(Localization.Text(
                 "Enter a valid model endpoint.",
                 "Укажите корректный endpoint модели."));
-        if (endpoint.Scheme != Uri.UriSchemeHttps &&
-            !(endpoint.Scheme == Uri.UriSchemeHttp && endpoint.IsLoopback))
+        if (endpoint.Scheme != Uri.UriSchemeHttp && endpoint.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException(Localization.Text(
-                "A remote endpoint must use HTTPS. HTTP is allowed only for a local model.",
-                "Удаленный endpoint должен использовать HTTPS. HTTP разрешен только для локальной модели."));
+                "The model endpoint must use HTTP or HTTPS.",
+                "Endpoint модели должен использовать HTTP или HTTPS."));
         if (profile.Model.Length == 0)
             throw new InvalidOperationException(Localization.Text(
                 "Enter a model name.",

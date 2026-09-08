@@ -184,6 +184,7 @@ public partial class MainWindow : Window
         SaveProfileButton.Content = Localization.Text("Save", "Сохранить");
         DeleteProfileButton.Content = Localization.Text("Delete", "Удалить");
         TestModelButton.Content = Localization.Text("Test connection", "Проверить подключение");
+        UpdateModelEndpointWarning();
         SavePromptButton.Content = Localization.Text("Save", "Сохранить");
         ReloadPromptButton.Content = Localization.Text("Reload", "Перечитать");
         RestorePromptButton.Content = Localization.Text("Restore default", "Вернуть стандартный");
@@ -214,6 +215,9 @@ public partial class MainWindow : Window
             new AuthenticationOption(
                 "ssh-key",
                 Localization.Text("SSH Key File", "SSH-ключ из файла")),
+            new AuthenticationOption(
+                "putty-key",
+                Localization.Text("PuTTY Key File (.ppk)", "Ключ PuTTY из файла (.ppk)")),
             new AuthenticationOption("https", "HTTPS")
         };
         AuthenticationComboBox.ItemsSource = options;
@@ -236,11 +240,17 @@ public partial class MainWindow : Window
     private void UpdateAuthenticationControls()
     {
         var mode = GetAuthenticationMode();
-        var usesKeyFile = mode == "ssh-key";
+        var usesKeyFile = mode is "ssh-key" or "putty-key";
         SshKeyPathTextBox.IsEnabled = usesKeyFile;
         BrowseSshKeyButton.IsEnabled = usesKeyFile;
+        SshKeyLabel.Text = mode == "putty-key"
+            ? Localization.Text("PuTTY private key (.ppk)", "Приватный ключ PuTTY (.ppk)")
+            : Localization.Text("SSH private key", "Приватный SSH-ключ");
         AuthenticationHelpTextBlock.Text = mode switch
         {
+            "putty-key" => Localization.Text(
+                "Select a .ppk private key. PuTTY plink.exe must be installed or available in PATH. Load an encrypted key into Pageant first.",
+                "Выберите приватный ключ .ppk. Установите PuTTY plink.exe или добавьте его в PATH. Зашифрованный ключ сначала загрузите в Pageant."),
             "ssh-key" => Localization.Text(
                 "Select a private key file. Add its public key to the Git server. Use SSH Agent if the key has a passphrase.",
                 "Выберите файл приватного ключа. Добавьте публичный ключ на Git-сервер. Для ключа с паролем используйте SSH Agent."),
@@ -258,18 +268,42 @@ public partial class MainWindow : Window
 
     private void BrowseSshKey_Click(object sender, RoutedEventArgs e)
     {
+        var usesPutty = GetAuthenticationMode() == "putty-key";
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Title = Localization.Text("Select an SSH private key", "Выберите приватный SSH-ключ"),
-            Filter = Localization.Text(
-                "SSH private keys|id_*;*.pem;*.key|All files|*.*",
-                "Приватные SSH-ключи|id_*;*.pem;*.key|Все файлы|*.*")
+            Title = usesPutty
+                ? Localization.Text("Select a PuTTY private key", "Выберите приватный ключ PuTTY")
+                : Localization.Text("Select an SSH private key", "Выберите приватный SSH-ключ"),
+            Filter = usesPutty
+                ? Localization.Text(
+                    "PuTTY private keys|*.ppk|All files|*.*",
+                    "Приватные ключи PuTTY|*.ppk|Все файлы|*.*")
+                : Localization.Text(
+                    "SSH private keys|id_*;*.pem;*.key|All files|*.*",
+                    "Приватные SSH-ключи|id_*;*.pem;*.key|Все файлы|*.*")
         };
         if (dialog.ShowDialog(this) == true)
         {
             SshKeyPathTextBox.Text = dialog.FileName;
             SaveAuthenticationPreferences();
         }
+    }
+
+    private void EndpointTextBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        UpdateModelEndpointWarning();
+
+    private void UpdateModelEndpointWarning()
+    {
+        if (ModelHttpWarningTextBlock is null)
+            return;
+        var endpointText = EndpointTextBox.Text.Trim();
+        ModelHttpWarningTextBlock.Text = Uri.TryCreate(endpointText, UriKind.Absolute, out var endpoint) &&
+                                         endpoint.Scheme == Uri.UriSchemeHttp &&
+                                         !endpoint.IsLoopback
+            ? Localization.Text(
+                "Warning: HTTP is not encrypted. The API key and repository diff can be intercepted in transit.",
+                "Предупреждение: HTTP не шифруется. API-ключ и diff репозитория могут быть перехвачены при передаче.")
+            : string.Empty;
     }
 
     private void SshKeyPathTextBox_LostKeyboardFocus(

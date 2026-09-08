@@ -251,6 +251,16 @@ public sealed class GitService
         if (settings.GitAuthenticationMode == "https")
             return;
 
+        if (settings.GitAuthenticationMode == "putty-key")
+        {
+            var puttyKeyPath = GetPrivateKeyPath(settings, "PuTTY");
+            var plinkPath = FindPlinkExecutable();
+            startInfo.Environment["GIT_SSH_COMMAND"] =
+                $"{QuoteForShell(plinkPath.Replace('\\', '/'))} -ssh -batch -i {QuoteForShell(puttyKeyPath.Replace('\\', '/'))}";
+            startInfo.Environment["GIT_SSH_VARIANT"] = "plink";
+            return;
+        }
+
         var sshExecutable = "ssh";
         if (settings.GitAuthenticationMode == "ssh-agent")
         {
@@ -266,26 +276,51 @@ public sealed class GitService
         var sshCommand = $"{sshExecutable} -o BatchMode=yes -o StrictHostKeyChecking=yes";
         if (settings.GitAuthenticationMode == "ssh-key")
         {
-            if (string.IsNullOrWhiteSpace(settings.SshPrivateKeyPath))
-                throw new GitException(Localization.Text(
-                    "Select an SSH private key file.",
-                    "Выберите файл приватного SSH-ключа."));
-            var keyPath = Path.GetFullPath(settings.SshPrivateKeyPath);
-            if (!File.Exists(keyPath))
-                throw new GitException(Localization.Format(
-                    "SSH private key not found: {0}",
-                    "Файл приватного SSH-ключа не найден: {0}",
-                    keyPath));
-            if (keyPath.IndexOfAny(['\r', '\n', '\0']) >= 0)
-                throw new GitException(Localization.Text(
-                    "The SSH private key path contains invalid characters.",
-                    "Путь к приватному SSH-ключу содержит недопустимые символы."));
-
+            var keyPath = GetPrivateKeyPath(settings, "SSH");
             sshCommand += $" -i {QuoteForShell(keyPath.Replace('\\', '/'))} -o IdentitiesOnly=yes";
         }
 
         startInfo.Environment["GIT_SSH_COMMAND"] = sshCommand;
         startInfo.Environment["GIT_SSH_VARIANT"] = "ssh";
+    }
+
+    private static string GetPrivateKeyPath(AppSettings settings, string keyType)
+    {
+        if (string.IsNullOrWhiteSpace(settings.SshPrivateKeyPath))
+            throw new GitException(Localization.Format(
+                "Select a {0} private key file.",
+                "Выберите файл приватного ключа {0}.",
+                keyType));
+        var keyPath = Path.GetFullPath(settings.SshPrivateKeyPath);
+        if (!File.Exists(keyPath))
+            throw new GitException(Localization.Format(
+                "Private key not found: {0}",
+                "Файл приватного ключа не найден: {0}",
+                keyPath));
+        if (keyPath.IndexOfAny(['\r', '\n', '\0']) >= 0)
+            throw new GitException(Localization.Text(
+                "The private key path contains invalid characters.",
+                "Путь к приватному ключу содержит недопустимые символы."));
+        return keyPath;
+    }
+
+    private static string FindPlinkExecutable()
+    {
+        var candidates = new List<string>();
+        foreach (var environmentVariable in new[] { "ProgramFiles", "ProgramFiles(x86)" })
+        {
+            var directory = Environment.GetEnvironmentVariable(environmentVariable);
+            if (!string.IsNullOrWhiteSpace(directory))
+                candidates.Add(Path.Combine(directory, "PuTTY", "plink.exe"));
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        candidates.AddRange(path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory.Trim('"'), "plink.exe")));
+        var executable = candidates.FirstOrDefault(File.Exists);
+        return executable ?? throw new GitException(Localization.Text(
+            "plink.exe was not found. Install PuTTY or add its folder to PATH.",
+            "Файл plink.exe не найден. Установите PuTTY или добавьте его папку в PATH."));
     }
 
     private async Task<(string Name, string Url, string MergeReference)?> TryGetUpstreamRemoteAsync(

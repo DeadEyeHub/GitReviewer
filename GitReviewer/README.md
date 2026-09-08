@@ -8,7 +8,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Reviews the current `HEAD` on the first connection without scanning older commits.
 - Runs `git pull --ff-only` and reviews each newly received commit separately.
 - Supports local-only repositories with automatic pull disabled.
-- Supports private remotes through SSH Agent, an SSH private key file, or HTTPS credentials.
+- Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Reviews added, modified, and deleted lines from each commit diff.
 - Allows manual review of any commit by its short or full SHA.
 - Supports multiple model profiles for OpenAI-compatible APIs, Ollama, and LM Studio.
@@ -40,7 +40,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-1.1.0-win-x64.exe
+dist\GitReviewer-1.2.0-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -71,13 +71,16 @@ working directory, with or without a configured remote.
 
 ## Repository Authentication
 
-The **Project** tab provides three authentication modes:
+The **Project** tab provides four authentication modes:
 
 - **SSH Agent** uses keys already loaded into Windows OpenSSH Agent. This is the
   recommended mode for private keys protected by a passphrase.
 - **SSH Key File** passes the selected private key file to OpenSSH. Only the
   path is stored in `settings.conf`; the key is not copied. Add the matching
   public key to the Git server. Use SSH Agent for an encrypted key.
+- **PuTTY Key File (.ppk)** runs PuTTY `plink.exe` in batch mode with the
+  selected `.ppk` file. Install PuTTY in its standard location or add it to
+  `PATH`. Load an encrypted key into Pageant before starting the review.
 - **HTTPS** uses credentials already stored by Git Credential Manager. GitHub
   requires a personal access token instead of an account password.
 
@@ -102,8 +105,10 @@ git ls-remote --exit-code <upstream-remote> <tracked-branch-ref>
 The upstream remote is read from the current branch, so the test uses the same
 remote as `git pull`. SSH Agent mode explicitly uses Windows OpenSSH Client and
 the Windows `ssh-agent` service instead of Git for Windows' bundled SSH client.
-SSH connections run non-interactively and require the server to already exist
-in the user's `known_hosts` file. The application never stores an SSH
+SSH connections run non-interactively. OpenSSH requires the server to already
+exist in the user's `known_hosts` file; PuTTY uses its own host-key cache.
+Verify and accept the server fingerprint using the corresponding client before
+running unattended checks. The application never stores an SSH
 passphrase or an HTTPS token itself.
 
 ## Review Behavior
@@ -143,8 +148,9 @@ An environment variable can be used instead of storing an API key in the file.
 When both are configured, `api_key_environment` takes precedence over
 `api_key`.
 
-Remote endpoints must use HTTPS. HTTP is allowed for loopback endpoints used by
-local model servers.
+Model endpoints may use HTTP or HTTPS. HTTP is useful for local networks and
+self-hosted model servers, but it does not encrypt the API key or repository
+diff. The GUI displays a warning for non-loopback HTTP endpoints.
 
 ## User Data
 

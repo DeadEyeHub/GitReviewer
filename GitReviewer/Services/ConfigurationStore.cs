@@ -31,7 +31,7 @@ public sealed class ConfigurationStore
                     settings.Language = value.Equals("ru", StringComparison.OrdinalIgnoreCase) ? "ru" : "en";
                     break;
                 case "git_authentication_mode":
-                    settings.GitAuthenticationMode = value is "ssh-agent" or "ssh-key" or "https"
+                    settings.GitAuthenticationMode = value is "ssh-agent" or "ssh-key" or "putty-key" or "https"
                         ? value
                         : "auto";
                     break;
