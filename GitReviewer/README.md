@@ -31,11 +31,21 @@ dotnet build
 dotnet run
 ```
 
-For a framework-dependent Windows x64 publication:
+To create one versioned, self-contained Windows x64 executable, run:
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false
+.\publish-win-x64.ps1
 ```
+
+The result is written to:
+
+```text
+dist\GitReviewer-1.1.0-win-x64.exe
+```
+
+The executable includes the .NET runtime and default configuration templates.
+It can be moved and launched by itself; no adjacent DLL or template files are
+required.
 
 After launch, select a Git repository, configure a model profile, test the
 connection, and click **Start**.

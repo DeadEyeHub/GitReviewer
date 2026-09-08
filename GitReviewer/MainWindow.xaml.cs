@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Drawing;
 using System.Globalization;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using GitReviewer.Models;
@@ -13,6 +14,9 @@ namespace GitReviewer;
 
 public partial class MainWindow : Window
 {
+    private static readonly string AppVersion =
+        Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
+
     private readonly ConfigurationStore _configuration = new();
     private readonly GitService _git = new();
     private readonly ModelClient _model = new();
@@ -138,7 +142,10 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
-        Title = Localization.Text("Git Reviewer", "Проверка Git");
+        Title = Localization.Format(
+            "Git Reviewer {0}",
+            "Проверка Git {0}",
+            AppVersion);
         ProjectTab.Header = Localization.Text("Project", "Проект");
         ModelsTab.Header = Localization.Text("Models", "Модели");
         PromptTab.Header = Localization.Text("System prompt", "Системный промпт");

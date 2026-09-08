@@ -135,12 +135,10 @@ public sealed class ConfigurationStore
         var templateName = language.Equals("ru", StringComparison.OrdinalIgnoreCase)
             ? "system-prompt.ru.example.txt"
             : "system-prompt.example.txt";
-        var template = AppPaths.Template(templateName);
-        if (!File.Exists(template))
-            throw new FileNotFoundException(Localization.Text(
-                "The system prompt template was not found.",
-                "Шаблон системного промпта не найден."), template);
-        File.Copy(template, AppPaths.SystemPrompt, true);
+        File.WriteAllText(
+            AppPaths.SystemPrompt,
+            AppPaths.ReadTemplate(templateName),
+            Encoding.UTF8);
     }
 
     public bool SwitchDefaultPromptLanguage(string language, string editorPrompt)
@@ -148,11 +146,8 @@ public sealed class ConfigurationStore
         if (!File.Exists(AppPaths.SystemPrompt))
             return false;
         var current = NormalizePrompt(editorPrompt);
-        var englishTemplate = AppPaths.Template("system-prompt.example.txt");
-        var russianTemplate = AppPaths.Template("system-prompt.ru.example.txt");
-        var matchesDefault = new[] { englishTemplate, russianTemplate }
-            .Where(File.Exists)
-            .Select(path => NormalizePrompt(File.ReadAllText(path, Encoding.UTF8)))
+        var matchesDefault = new[] { "system-prompt.example.txt", "system-prompt.ru.example.txt" }
+            .Select(name => NormalizePrompt(AppPaths.ReadTemplate(name)))
             .Any(prompt => prompt.Equals(current, StringComparison.Ordinal));
         if (!matchesDefault)
             return false;

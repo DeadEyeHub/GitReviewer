@@ -8,13 +8,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Update="models.example.conf" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="settings.example.conf" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="system-prompt.example.txt" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="system-prompt.ru.example.txt" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="models.example.conf" LogicalName="GitReviewer.Templates.models.example.conf" />
+    <EmbeddedResource Include="system-prompt.example.txt" LogicalName="GitReviewer.Templates.system-prompt.example.txt" />
+    <EmbeddedResource Include="system-prompt.ru.example.txt" LogicalName="GitReviewer.Templates.system-prompt.ru.example.txt" />
   </ItemGroup>
 
 </Project>

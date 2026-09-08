@@ -1,3 +1,6 @@
+using System.Reflection;
+using System.Text;
+
 namespace GitReviewer.Services;
 
 public static class AppPaths
@@ -12,22 +15,29 @@ public static class AppPaths
     public static string SystemPrompt => Path.Combine(DataDirectory, "system-prompt.txt");
     public static string ReportsDirectory => Path.Combine(DataDirectory, "reports");
 
-    public static string Template(string fileName) => Path.Combine(AppContext.BaseDirectory, fileName);
-
     public static void EnsureCreated()
     {
         Directory.CreateDirectory(DataDirectory);
         Directory.CreateDirectory(ReportsDirectory);
 
-        CopyIfMissing(Template("models.example.conf"), ModelsConfig);
-        CopyIfMissing(Template("system-prompt.example.txt"), SystemPrompt);
+        WriteIfMissing(ReadTemplate("models.example.conf"), ModelsConfig);
+        WriteIfMissing(ReadTemplate("system-prompt.example.txt"), SystemPrompt);
         MigrateOriginalDefaultPrompt();
     }
 
-    private static void CopyIfMissing(string source, string destination)
+    public static string ReadTemplate(string fileName)
     {
-        if (!File.Exists(destination) && File.Exists(source))
-            File.Copy(source, destination);
+        var resourceName = $"GitReviewer.Templates.{fileName}";
+        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded template not found: {fileName}");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+
+    private static void WriteIfMissing(string content, string destination)
+    {
+        if (!File.Exists(destination))
+            File.WriteAllText(destination, content, Encoding.UTF8);
     }
 
     private static void MigrateOriginalDefaultPrompt()
@@ -45,11 +55,10 @@ public static class AppPaths
             опасное изменение.
             """;
 
-        var template = Template("system-prompt.example.txt");
-        if (!File.Exists(SystemPrompt) || !File.Exists(template))
+        if (!File.Exists(SystemPrompt))
             return;
         var current = File.ReadAllText(SystemPrompt).Replace("\r\n", "\n").Trim();
         if (current.Equals(originalDefault.Replace("\r\n", "\n").Trim(), StringComparison.Ordinal))
-            File.Copy(template, SystemPrompt, true);
+            File.WriteAllText(SystemPrompt, ReadTemplate("system-prompt.example.txt"), Encoding.UTF8);
     }
 }
