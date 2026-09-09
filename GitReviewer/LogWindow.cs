@@ -22,9 +22,9 @@ public sealed class LogWindow : Window
         Content = _text;
     }
 
-    public void SetLines(IEnumerable<string> lines)
+    public void SetText(string text)
     {
-        _text.Text = string.Join(Environment.NewLine, lines);
+        _text.Text = text;
         _text.ScrollToEnd();
     }
 }

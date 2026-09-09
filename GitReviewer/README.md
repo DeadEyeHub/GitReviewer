@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.0.0** introduces native model-driven Git tools and requires a
+Version **2.0.1** introduces native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -45,7 +45,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.0.0-win-x64.exe
+dist\GitReviewer-2.0.1-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -237,16 +237,25 @@ guarantee that a model's findings are accurate.
 ## Journal And Log
 
 The former Log tab is now **Journal** (**Журнал**) and retains general messages.
-The main window's **Log** (**Лог**) button opens a separate window containing the
-latest 500 lifecycle entries: model and commit, repository preparation,
-request, waiting, response received, parsing, report writing, cursor saving,
-completion, failure, or cancellation. Stage identifiers are language-independent.
-Agent lifecycle and actual tool names with started/succeeded/rejected/failed/canceled
-status are included; unsupported names are replaced with a fixed safe label.
-This is not token streaming or internal model reasoning. No prompts, diffs,
-response bodies, API keys, or authentication details are included in this window.
-Closing it does not interrupt review; reopening restores the bounded history.
-Hiding the main window also hides Log, and exiting the app closes it.
+Journal is appended to `%LOCALAPPDATA%\GitReviewer\journal.log`; the last 500
+lines are loaded into the tab after a complete application restart. The file
+rotates at 8 MiB and one previous generation is retained as `journal.log.1`.
+
+The main window's **Log** (**Лог**) button opens a separate detailed model window.
+It records the complete JSON request body, raw HTTP response stream, assistant
+content, server-returned `reasoning` / `reasoning_content`, tool-call arguments,
+tool results, and lifecycle stages. Streaming responses appear while generation
+is in progress. Hidden chain-of-thought cannot be recovered when a server or model
+does not return those fields. Authorization headers, API keys, and environment
+variable values are never logged.
+
+Detailed data is appended to `%LOCALAPPDATA%\GitReviewer\model-log.log`; it rotates
+at 32 MiB and keeps one previous generation as `model-log.log.1`. The Log window
+shows a bounded recent tail to keep WPF responsive, while the files hold the full
+retained exchange. These files contain prompts, repository paths, diffs, committed
+file contents, and model responses and must therefore be treated as sensitive.
+Closing Log does not interrupt review; reopening restores its recent tail. Hiding
+the main window also hides Log, and exiting the app closes it.
 
 After the report is written (and the automatic cursor saved), the app requests
 one tray balloon per completed commit, including `NO_BUGS`. Historical unstructured

@@ -17,6 +17,7 @@ public sealed class ReviewRunner
     private string _activeCommit = string.Empty;
 
     public event Action<string>? Log;
+    public event Action<string>? ModelLog;
     public event Action<string>? StatusChanged;
     public event Action<string>? CommitChanged;
     public event Action<ReviewProgress>? Progress;
@@ -277,7 +278,7 @@ public sealed class ReviewRunner
         {
             var response = await _model.ReviewAsync(profile, tools, branch, _configuration.LoadPrompt(), cancellationToken,
                 stage => Emit(stage, profile, sha), message =>
-                    Publish(Progress, new ReviewProgress(ReviewStage.Tool, profile.Model, sha, Detail: message)));
+                    Publish(ModelLog, message));
             Emit(ReviewStage.Parsing, profile, sha);
             result = ReviewParser.Parse(response);
         }

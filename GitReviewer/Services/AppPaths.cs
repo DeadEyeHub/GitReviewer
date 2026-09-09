@@ -14,6 +14,8 @@ public static class AppPaths
     public static string StateFile => Path.Combine(DataDirectory, "state.json");
     public static string SystemPrompt => Path.Combine(DataDirectory, "system-prompt.txt");
     public static string ReportsDirectory => Path.Combine(DataDirectory, "reports");
+    public static string JournalLog => Path.Combine(DataDirectory, "journal.log");
+    public static string ModelLog => Path.Combine(DataDirectory, "model-log.log");
 
     public static void EnsureCreated()
     {

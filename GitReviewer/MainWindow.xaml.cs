@@ -41,7 +41,10 @@ public partial class MainWindow : Window
     private bool _loadingRepository = true;
     private bool _repositoryReady;
     private int _repositoryVersion;
-    private readonly Queue<string> _progressLines = new();
+    private readonly PersistentLog _journal = new(AppPaths.JournalLog);
+    private readonly PersistentLog _details = new(
+        AppPaths.ModelLog, maxBytes: 32 * 1024 * 1024, maxTailLines: 10_000, maxTailCharacters: 4_000_000);
+    private readonly System.Windows.Threading.DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private LogWindow? _logWindow;
 
     public MainWindow()
@@ -50,11 +53,15 @@ public partial class MainWindow : Window
 
         _runner = new ReviewRunner(
             _git, _model, _configuration, new StateStore(), _reportWriter);
-        _runner.Log += message => Dispatch(() => AppendLog(message));
+        _runner.Log += AppendLog;
+        _runner.ModelLog += _details.Append;
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
         _runner.CommitChanged += commit => Dispatch(() => CommitRun.Text = commit);
-        _runner.Progress += progress => Dispatch(() => AppendProgress(progress));
+        _runner.Progress += AppendProgress;
         _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
+        _logTimer.Tick += (_, _) => RefreshLogs();
+        _logTimer.Start();
+        RefreshLogs();
 
         var settings = _configuration.LoadSettings();
         Localization.SetLanguage(settings.Language);
@@ -902,6 +909,8 @@ public partial class MainWindow : Window
             }
         }
         await _runner.StopAsync();
+        _logTimer.Stop();
+        RefreshLogs();
         _logWindow?.Close();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
@@ -934,9 +943,17 @@ public partial class MainWindow : Window
 
     private void AppendLog(string message)
     {
-        if (LogTextBox.Text.Length > 100_000) LogTextBox.Text = LogTextBox.Text[^50_000..];
-        LogTextBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
-        LogTextBox.ScrollToEnd();
+        _journal.Append(message);
+    }
+
+    private void RefreshLogs()
+    {
+        if (_journal.Snapshot() is { } journal)
+        {
+            LogTextBox.Text = journal;
+            LogTextBox.ScrollToEnd();
+        }
+        if (_logWindow is not null && _details.Snapshot() is { } details) _logWindow.SetText(details);
     }
 
     private void Dispatch(Action action)
@@ -958,7 +975,7 @@ public partial class MainWindow : Window
             _logWindow = new LogWindow { Owner = this, Title = Localization.Text("Log", "Лог") };
             _logWindow.Closed += (_, _) => _logWindow = null;
         }
-        _logWindow.SetLines(_progressLines);
+        _logWindow.SetText(_details.Snapshot(true)!);
         _logWindow.Show();
         _logWindow.Activate();
     }
@@ -968,9 +985,8 @@ public partial class MainWindow : Window
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
         var detail = new string(progress.Detail.Where(c => !char.IsControl(c)).Take(200).ToArray());
-        _progressLines.Enqueue($"{DateTime.Now:HH:mm:ss} | {model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}");
-        while (_progressLines.Count > 500) _progressLines.Dequeue();
-        _logWindow?.SetLines(_progressLines);
+        _journal.Append($"{model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}");
+        _details.Append($"{model} | {commit} | {progress.Stage}");
     }
 
     private void NotifyReviewed(CommitReviewed reviewed)

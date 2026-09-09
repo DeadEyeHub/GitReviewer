@@ -122,29 +122,21 @@ public sealed class ModelClient
                 using var request = new HttpRequestMessage(HttpMethod.Post, ResolveEndpoint(profile.Endpoint))
                 {
                     Content = JsonContent.Create(new { model = profile.Model, temperature = 0, messages,
-                        tools = GitToolSession.Definitions, tool_choice = "auto", parallel_tool_calls = false })
+                        tools = GitToolSession.Definitions, tool_choice = "auto", parallel_tool_calls = false, stream = true })
                 };
                 var apiKey = ResolveApiKey(profile);
                 if (apiKey.Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                log?.Invoke("API request body: " + await request.Content.ReadAsStringAsync(cancellationToken));
                 progress?.Invoke(ReviewStage.Request);
                 var responseTask = _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 progress?.Invoke(ReviewStage.Waiting);
                 using var response = await responseTask;
+                log?.Invoke($"API response status: {(int)response.StatusCode}");
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Review API returned {(int)response.StatusCode}. Native tools/tool_calls and tool_choice=auto are required. " +
                         "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.");
-                using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                using var reader = new StreamReader(stream);
-                var body = new StringBuilder();
-                var buffer = new char[4096];
-                int count;
-                while ((count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
-                {
-                    if (body.Length + count > 128_000) throw new InvalidDataException("Model response exceeds 128000 characters; review incomplete.");
-                    body.Append(buffer, 0, count);
-                }
+                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken);
                 progress?.Invoke(ReviewStage.Response);
-                using var document = JsonDocument.Parse(body.ToString());
                 var choice = document.RootElement.GetProperty("choices")[0];
                 var finish = choice.GetProperty("finish_reason").GetString();
                 var message = choice.GetProperty("message");
@@ -162,20 +154,28 @@ public sealed class ModelClient
                         _ = call.GetProperty("function").GetProperty("name").GetString();
                         _ = call.GetProperty("function").GetProperty("arguments").GetString();
                     }
-                    messages.Add(new { role = "assistant",
-                        content = message.TryGetProperty("content", out var assistantContent) ? assistantContent.GetString() : null,
-                        tool_calls = toolCalls.Clone() });
+                    var assistantMessage = new Dictionary<string, object?>
+                    {
+                        ["role"] = "assistant",
+                        ["content"] = message.TryGetProperty("content", out var assistantContent) ? assistantContent.GetString() : null,
+                        ["tool_calls"] = toolCalls.Clone()
+                    };
+                    foreach (var field in new[] { "reasoning", "reasoning_content" })
+                        if (message.TryGetProperty(field, out var reasoning) && reasoning.ValueKind == JsonValueKind.String)
+                            assistantMessage[field] = reasoning.GetString();
+                    messages.Add(assistantMessage);
                     foreach (var call in toolCalls.EnumerateArray())
                     {
                         calls++;
                         var function = call.GetProperty("function");
                         var name = function.GetProperty("name").GetString() ?? "";
                         var safeName = GitToolSession.Names.Contains(name) ? name : "unsupported_tool";
-                        log?.Invoke($"Git tool {calls}: {safeName} started");
+                        var arguments = function.GetProperty("arguments").GetString() ?? "";
+                        log?.Invoke($"Git tool {calls}: {safeName} arguments: {arguments}");
                         string result;
                         try
                         {
-                            result = await tools.ExecuteAsync(name, function.GetProperty("arguments").GetString() ?? "", cancellationToken);
+                            result = await tools.ExecuteAsync(name, arguments, cancellationToken);
                             unresolvedErrors.Remove(safeName);
                             unresolvedErrors.Remove("unsupported_tool");
                             log?.Invoke($"Git tool {calls}: {safeName} succeeded");
@@ -197,6 +197,7 @@ public sealed class ModelClient
                             throw;
                         }
                         output += result.Length;
+                        log?.Invoke($"Tool result {call.GetProperty("id").GetString()}: {result}");
                         if (output > 512_000) throw new InvalidDataException("Git tool output budget exhausted; review incomplete.");
                         messages.Add(new { role = "tool", tool_call_id = call.GetProperty("id").GetString(), content = result });
                     }
