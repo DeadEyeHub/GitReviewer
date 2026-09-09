@@ -178,7 +178,7 @@ public sealed class ReviewRunner
             }
             catch (Exception exception)
             {
-                Emit(ReviewStage.Failed, profile, _activeCommit);
+                Emit(ReviewStage.Failed, profile, _activeCommit, exception.Message);
                 StatusChanged?.Invoke(Localization.Text("Error", "Ошибка"));
                 Log?.Invoke(Localization.Format("Error: {0}", "Ошибка: {0}", exception.Message));
             }
@@ -203,12 +203,23 @@ public sealed class ReviewRunner
             StatusChanged?.Invoke(Localization.Text("Running git fetch", "Выполняется git fetch"));
             var fetchSettings = new AppSettings
             {
-                BranchRef = branch, GitAuthenticationMode = settings.GitAuthenticationMode,
-                SshPrivateKeyPath = settings.SshPrivateKeyPath, PlinkPath = settings.PlinkPath
+                BranchRef = branch,
+                GitAuthenticationMode = settings.GitAuthenticationMode,
+                SshPrivateKeyPath = settings.SshPrivateKeyPath,
+                PlinkPath = settings.PlinkPath
             };
             var fetch = await _git.FetchAsync(repositoryPath, fetchSettings, cancellationToken);
             if (fetch.ExitCode != 0)
-                throw new GitException(Localization.Text("Git fetch failed.", "Git fetch не выполнен."));
+            {
+                var details = string.IsNullOrWhiteSpace(fetch.Error) ? fetch.Output : fetch.Error;
+                if (string.IsNullOrWhiteSpace(details))
+                    details = Localization.Text("Git returned no error output.", "Git не вернул текст ошибки.");
+                throw new GitException(Localization.Format(
+                    "Git fetch failed with exit code {0}: {1}",
+                    "Git fetch не выполнен, код завершения {0}: {1}",
+                    fetch.ExitCode,
+                    details.Trim()));
+            }
             Log?.Invoke(Localization.Text("Git fetch completed.", "Git fetch выполнен."));
         }
 
@@ -291,8 +302,8 @@ public sealed class ReviewRunner
 
     private static string Short(string sha) => sha[..Math.Min(8, sha.Length)];
 
-    private void Emit(ReviewStage stage, ModelProfile profile, string sha) =>
-        Publish(Progress, new ReviewProgress(stage, profile.Model, sha));
+    private void Emit(ReviewStage stage, ModelProfile profile, string sha, string detail = "") =>
+        Publish(Progress, new ReviewProgress(stage, profile.Model, sha, detail));
 
     private void Complete(string path, string branch, string sha, ModelProfile profile,
         ReviewResult result, bool manual, CancellationToken cancellationToken)

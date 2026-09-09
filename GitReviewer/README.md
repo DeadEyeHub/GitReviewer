@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.0.1** introduces native model-driven Git tools and requires a
+Version **2.0.2** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -45,7 +45,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.0.1-win-x64.exe
+dist\GitReviewer-2.0.2-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.

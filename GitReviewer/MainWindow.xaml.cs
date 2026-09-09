@@ -984,9 +984,12 @@ public partial class MainWindow : Window
     {
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
-        var detail = new string(progress.Detail.Where(c => !char.IsControl(c)).Take(200).ToArray());
-        _journal.Append($"{model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}");
-        _details.Append($"{model} | {commit} | {progress.Stage}");
+        var detail = new string(progress.Detail.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+        if (detail.Length > 2000)
+            detail = detail[..950] + " ... " + detail[^1045..];
+        var entry = $"{model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}";
+        _journal.Append(entry);
+        _details.Append(entry);
     }
 
     private void NotifyReviewed(CommitReviewed reviewed)
