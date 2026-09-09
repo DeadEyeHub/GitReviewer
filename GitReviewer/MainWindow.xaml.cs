@@ -37,6 +37,12 @@ public partial class MainWindow : Window
     private bool _exitRequested;
     private int _modelRequestVersion;
     private IReadOnlyList<ModelClient.AvailableModel> _availableModels = [];
+    private string _selectedBranch = string.Empty;
+    private bool _loadingRepository = true;
+    private bool _repositoryReady;
+    private int _repositoryVersion;
+    private readonly Queue<string> _progressLines = new();
+    private LogWindow? _logWindow;
 
     public MainWindow()
     {
@@ -47,6 +53,8 @@ public partial class MainWindow : Window
         _runner.Log += message => Dispatch(() => AppendLog(message));
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
         _runner.CommitChanged += commit => Dispatch(() => CommitRun.Text = commit);
+        _runner.Progress += progress => Dispatch(() => AppendProgress(progress));
+        _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
 
         var settings = _configuration.LoadSettings();
         Localization.SetLanguage(settings.Language);
@@ -111,6 +119,7 @@ public partial class MainWindow : Window
 
     public void ShowFromTray()
     {
+        if (_exitRequested) return;
         Show();
         WindowState = WindowState.Normal;
         Activate();
@@ -120,10 +129,13 @@ public partial class MainWindow : Window
 
     private void LoadSettings(AppSettings settings)
     {
+        _selectedBranch = settings.BranchRef;
         RepositoryPathTextBox.Text = settings.RepositoryPath;
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
         SshKeyPathTextBox.Text = settings.SshPrivateKeyPath;
+        PlinkPathTextBox.Text = settings.PlinkPath;
+        _loadingRepository = false;
         if (settings.RepositoryPath.Length > 0)
             _ = RefreshRepositoryInfoAsync();
     }
@@ -151,18 +163,21 @@ public partial class MainWindow : Window
         ProjectTab.Header = Localization.Text("Project", "Проект");
         ModelsTab.Header = Localization.Text("Models", "Модели");
         PromptTab.Header = Localization.Text("System prompt", "Системный промпт");
-        LogTab.Header = Localization.Text("Log", "Журнал");
+        LogTab.Header = Localization.Text("Journal", "Журнал");
+        OpenLogButton.Content = Localization.Text("Log", "Лог");
+        RefreshBranchesButton.Content = Localization.Text("Refresh", "Обновить");
+        if (_logWindow is not null) _logWindow.Title = Localization.Text("Log", "Лог");
         ProjectFolderLabel.Text = Localization.Text("Project folder", "Папка проекта");
         BrowseButton.Content = Localization.Text("Browse...", "Обзор...");
         IntervalLabel.Text = Localization.Text("Interval, seconds", "Интервал, секунд");
         ReceiveChangesLabel.Text = Localization.Text("Receive changes", "Получение изменений");
         PullEnabledCheckBox.Content = Localization.Text(
-            "Run git pull --ff-only before each check",
-            "Выполнять git pull --ff-only перед каждой проверкой");
+            "Run git fetch before each check",
+            "Выполнять git fetch перед каждой проверкой");
         PullExplanationTextBlock.Text = Localization.Text(
-            "Enable this for a clone that tracks a remote branch. It downloads new commits into the selected folder without creating merge commits. Disable it for a local-only repository.",
-            "Включите для клона, который отслеживает удаленную ветку. Новые коммиты загружаются в выбранную папку без создания merge-коммитов. Отключите для полностью локального репозитория.");
-        CurrentBranchLabel.Text = Localization.Text("Current branch", "Текущая ветка");
+            "Fetch updates remote-tracking refs only, never the checkout. Select refs/remotes/... to review remote updates; local branches are read as-is. Disable for local-only repositories.",
+            "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Отключите для локального репозитория.");
+        CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
         SelectedCommitLabel.Text = Localization.Text("Review selected commit", "Проверить выбранный коммит");
         CommitShaTextBox.ToolTip = Localization.Text(
@@ -172,6 +187,11 @@ public partial class MainWindow : Window
         AuthenticationLabel.Text = Localization.Text("Authentication", "Аутентификация");
         SshKeyLabel.Text = Localization.Text("SSH private key", "Приватный SSH-ключ");
         BrowseSshKeyButton.Content = Localization.Text("Browse...", "Обзор...");
+        PlinkPathLabel.Text = Localization.Text("Plink executable", "Исполняемый файл Plink");
+        BrowsePlinkButton.Content = Localization.Text("Browse...", "Обзор...");
+        PlinkPathTextBox.ToolTip = Localization.Text(
+            "Path to plink.exe. Leave empty to detect PuTTY in its standard locations or PATH.",
+            "Путь к plink.exe. Оставьте пустым для поиска PuTTY в стандартных папках или PATH.");
         RemoteAccessLabel.Text = Localization.Text("Remote access", "Доступ к remote");
         TestRemoteButton.Content = Localization.Text("Test repository access", "Проверить доступ");
         LoadAuthenticationOptions(GetAuthenticationMode());
@@ -202,6 +222,7 @@ public partial class MainWindow : Window
         StopButton.Content = Localization.Text("Stop", "Стоп");
         OpenReportButton.Content = Localization.Text("Open report", "Открыть отчет");
         HideToTrayButton.Content = Localization.Text("Hide to tray", "Скрыть в трей");
+        ExitButton.Content = Localization.Text("Exit", "Выход");
 
         _trayOpenItem.Text = Localization.Text("Open Git Reviewer", "Открыть Git Reviewer");
         _trayStartItem.Text = Localization.Text("Start review", "Запустить проверку");
@@ -250,23 +271,25 @@ public partial class MainWindow : Window
         var usesKeyFile = mode is "ssh-key" or "putty-key";
         SshKeyPathTextBox.IsEnabled = usesKeyFile;
         BrowseSshKeyButton.IsEnabled = usesKeyFile;
+        PlinkPathTextBox.IsEnabled = mode == "putty-key";
+        BrowsePlinkButton.IsEnabled = mode == "putty-key";
         SshKeyLabel.Text = mode == "putty-key"
             ? Localization.Text("PuTTY private key (.ppk)", "Приватный ключ PuTTY (.ppk)")
             : Localization.Text("SSH private key", "Приватный SSH-ключ");
         AuthenticationHelpTextBlock.Text = mode switch
         {
             "putty-key" => Localization.Text(
-                "Select a .ppk private key. PuTTY plink.exe must be installed or available in PATH. Load an encrypted key into Pageant first.",
-                "Выберите приватный ключ .ppk. Установите PuTTY plink.exe или добавьте его в PATH. Зашифрованный ключ сначала загрузите в Pageant."),
+                "Select a .ppk private key and optionally the path to plink.exe. Leave the Plink path empty for auto-detection. Load an encrypted key into Pageant first.",
+                "Выберите приватный ключ .ppk и при необходимости путь к plink.exe. Пустой путь включает автоматический поиск Plink. Зашифрованный ключ сначала загрузите в Pageant."),
             "ssh-key" => Localization.Text(
                 "Select a private key file. Add its public key to the Git server. Use SSH Agent if the key has a passphrase.",
                 "Выберите файл приватного ключа. Добавьте публичный ключ на Git-сервер. Для ключа с паролем используйте SSH Agent."),
             "https" => Localization.Text(
-                "Uses credentials already stored by Git Credential Manager. The origin URL must start with https://.",
-                "Используются учетные данные из Git Credential Manager. Адрес origin должен начинаться с https://."),
+                "Uses credentials already stored by Git Credential Manager. The selected remote URL must start with https://.",
+                "Используются учетные данные из Git Credential Manager. Адрес выбранного remote должен начинаться с https://."),
             _ => Localization.Text(
-                "Uses keys loaded into Windows OpenSSH Agent. The origin must use an SSH URL.",
-                "Используются ключи, загруженные в Windows OpenSSH Agent. Для origin нужен SSH-адрес.")
+                "Uses keys loaded into Windows OpenSSH Agent. The selected remote must use an SSH URL.",
+                "Используются ключи, загруженные в Windows OpenSSH Agent. Для выбранного remote нужен SSH-адрес.")
         };
     }
 
@@ -292,6 +315,22 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             SshKeyPathTextBox.Text = dialog.FileName;
+            SaveAuthenticationPreferences();
+        }
+    }
+
+    private void BrowsePlink_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = Localization.Text("Select Plink executable", "Выберите исполняемый файл Plink"),
+            Filter = Localization.Text(
+                "PuTTY Plink|plink.exe|Executable files|*.exe",
+                "PuTTY Plink|plink.exe|Исполняемые файлы|*.exe")
+        };
+        if (dialog.ShowDialog(this) == true)
+        {
+            PlinkPathTextBox.Text = dialog.FileName;
             SaveAuthenticationPreferences();
         }
     }
@@ -390,11 +429,13 @@ public partial class MainWindow : Window
         var settings = _configuration.LoadSettings();
         settings.GitAuthenticationMode = GetAuthenticationMode();
         settings.SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim();
+        settings.PlinkPath = PlinkPathTextBox.Text.Trim();
         _configuration.SaveSettings(settings);
     }
 
     private async void TestRemote_Click(object sender, RoutedEventArgs e)
     {
+        var version = _repositoryVersion;
         TestRemoteButton.IsEnabled = false;
         RemoteAccessStatusTextBlock.Text = Localization.Text(
             "Testing repository access...",
@@ -405,12 +446,14 @@ public partial class MainWindow : Window
             _configuration.SaveSettings(settings);
             await _git.TestRemoteAccessAsync(
                 settings.RepositoryPath, settings, CancellationToken.None);
+            if (version != _repositoryVersion || _exitRequested) return;
             RemoteAccessStatusTextBlock.Text = Localization.Text(
                 "Repository access confirmed.",
                 "Доступ к репозиторию подтвержден.");
         }
         catch (Exception exception)
         {
+            if (version != _repositoryVersion || _exitRequested) return;
             RemoteAccessStatusTextBlock.Text = Localization.Format(
                 "Repository access failed: {0}",
                 "Ошибка доступа к репозиторию: {0}",
@@ -433,7 +476,7 @@ public partial class MainWindow : Window
             ProfilesComboBox.SelectedIndex = 0;
     }
 
-    private async void BrowseRepository_Click(object sender, RoutedEventArgs e)
+    private void BrowseRepository_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog
         {
@@ -444,34 +487,74 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             RepositoryPathTextBox.Text = dialog.FolderName;
-            await RefreshRepositoryInfoAsync();
         }
+    }
+
+    private async void RepositoryPath_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingRepository) return;
+        _selectedBranch = string.Empty;
+        await RefreshRepositoryInfoAsync();
+    }
+
+    private async void RefreshBranches_Click(object sender, RoutedEventArgs e) => await RefreshRepositoryInfoAsync();
+
+    private async void Branch_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingRepository || BranchComboBox.SelectedItem is not string branch) return;
+        _selectedBranch = branch;
+        await RefreshRepositoryInfoAsync();
     }
 
     private async Task RefreshRepositoryInfoAsync()
     {
+        var version = ++_repositoryVersion;
+        var selected = _selectedBranch;
+        _repositoryReady = false;
+        _loadingRepository = true;
+        BranchComboBox.ItemsSource = selected.Length == 0 ? Array.Empty<string>() : new[] { selected };
+        BranchComboBox.SelectedItem = selected;
+        _loadingRepository = false;
+        RemoteTextBlock.Text = string.Empty;
+        RemoteAccessStatusTextBlock.Text = string.Empty;
         try
         {
             var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
             await _git.ValidateRepositoryAsync(path, CancellationToken.None);
-            BranchTextBlock.Text = await _git.GetBranchAsync(path, CancellationToken.None);
-            var remote = await _git.GetRemoteSummaryAsync(path, CancellationToken.None);
+            var branches = await _git.GetBranchesAsync(path, CancellationToken.None);
+            if (version != _repositoryVersion || _exitRequested) return;
+            // Keep a missing selection visible, but allow choosing another existing ref.
+            _loadingRepository = true;
+            BranchComboBox.ItemsSource = branches.Concat(selected.Length == 0 ? [] : new[] { selected }).Distinct(StringComparer.Ordinal).ToArray();
+            BranchComboBox.SelectedItem = selected;
+            _loadingRepository = false;
+            var branch = await _git.ResolveBranchAsync(path, selected, CancellationToken.None);
+            if (version != _repositoryVersion || _exitRequested) return;
+            _selectedBranch = branch;
+            _loadingRepository = true;
+            BranchComboBox.ItemsSource = branches;
+            BranchComboBox.SelectedItem = branch;
+            _loadingRepository = false;
+            var settings = _configuration.LoadSettings();
+            settings.RepositoryPath = path;
+            settings.BranchRef = branch;
+            _configuration.SaveSettings(settings);
+            var remote = await _git.GetSelectedRemoteSummaryAsync(path, branch, CancellationToken.None);
+            var detectedMode = _authenticationNeedsDetection
+                ? await _git.DetectAuthenticationModeAsync(path, CancellationToken.None, branch) : null;
+            if (version != _repositoryVersion || _exitRequested) return;
             RemoteTextBlock.Text = remote.Length == 0
                 ? Localization.Text("Not configured", "Не настроен")
                 : remote;
-            if (_authenticationNeedsDetection)
+            if (_authenticationNeedsDetection && detectedMode is not null)
             {
-                var detectedMode = await _git.DetectAuthenticationModeAsync(path, CancellationToken.None);
-                if (_authenticationNeedsDetection)
-                {
-                    LoadAuthenticationOptions(detectedMode);
-                    _authenticationNeedsDetection = false;
-                }
+                LoadAuthenticationOptions(detectedMode);
             }
+            _repositoryReady = true;
         }
         catch (Exception exception)
         {
-            BranchTextBlock.Text = "-";
+            if (version != _repositoryVersion || _exitRequested) return;
             RemoteTextBlock.Text = exception.Message;
         }
     }
@@ -630,7 +713,7 @@ public partial class MainWindow : Window
 
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)
     {
-        if (_manualReviewTask is { IsCompleted: false })
+        if (_exitRequested || _manualReviewTask is { IsCompleted: false })
             return;
 
         try
@@ -638,10 +721,12 @@ public partial class MainWindow : Window
             var settings = ReadSettingsFromForm();
             var profile = ReadProfileFromForm();
             var revision = CommitShaTextBox.Text.Trim();
+            _configuration.SaveSettings(settings);
             _configuration.SavePrompt(PromptTextBox.Text);
             ReviewCommitButton.IsEnabled = false;
             StartButton.IsEnabled = false;
             _trayStartItem.Enabled = false;
+            SetRepositoryControls(false);
             _manualReviewCancellation = new CancellationTokenSource();
             _manualReviewTask = _runner.ReviewSingleCommitAsync(
                 settings, profile, revision, _manualReviewCancellation.Token);
@@ -660,6 +745,7 @@ public partial class MainWindow : Window
             _manualReviewCancellation?.Dispose();
             _manualReviewCancellation = null;
             _manualReviewTask = null;
+            SetRepositoryControls(!_runner.IsRunning);
             ReviewCommitButton.IsEnabled = !_runner.IsRunning;
             StartButton.IsEnabled = !_runner.IsRunning;
             _trayStartItem.Enabled = !_runner.IsRunning;
@@ -670,11 +756,13 @@ public partial class MainWindow : Window
 
     private async Task StartReviewAsync()
     {
-        if (_runner.IsRunning || _manualReviewTask is { IsCompleted: false })
+        var repositoryVersion = _repositoryVersion;
+        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false })
             return;
         StartButton.IsEnabled = false;
         _trayStartItem.Enabled = false;
         ReviewCommitButton.IsEnabled = false;
+        SetRepositoryControls(false);
         try
         {
             var settings = ReadSettingsFromForm();
@@ -698,7 +786,10 @@ public partial class MainWindow : Window
             _configuration.SaveModels(_models);
 
             await _git.ValidateRepositoryAsync(Path.GetFullPath(settings.RepositoryPath), CancellationToken.None);
-            await RefreshRepositoryInfoAsync();
+            settings.BranchRef = await _git.ResolveBranchAsync(settings.RepositoryPath, settings.BranchRef, CancellationToken.None);
+            if (_exitRequested) return;
+            if (repositoryVersion != _repositoryVersion)
+                throw new InvalidOperationException(Localization.Text("Repository selection changed. Start again.", "Выбор репозитория изменился. Запустите снова."));
             if (!_runner.Start(settings, profile))
                 throw new InvalidOperationException(Localization.Text(
                     "Another review operation is already running.",
@@ -715,6 +806,10 @@ public partial class MainWindow : Window
 
     private AppSettings ReadSettingsFromForm()
     {
+        if (!_repositoryReady)
+            throw new InvalidOperationException(Localization.Text(
+                "Wait for repository refresh and select an existing branch.",
+                "Дождитесь обновления репозитория и выберите существующую ветку."));
         var path = RepositoryPathTextBox.Text.Trim();
         if (path.Length == 0)
             throw new InvalidOperationException(Localization.Text(
@@ -727,11 +822,13 @@ public partial class MainWindow : Window
         return new AppSettings
         {
             RepositoryPath = Path.GetFullPath(path),
+            BranchRef = _selectedBranch,
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
             Language = Localization.Language,
             GitAuthenticationMode = GetAuthenticationMode(),
-            SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim()
+            SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim(),
+            PlinkPath = PlinkPathTextBox.Text.Trim()
         };
     }
 
@@ -750,7 +847,8 @@ public partial class MainWindow : Window
         try
         {
             var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
-            var branch = await _git.GetBranchAsync(path, CancellationToken.None);
+            var branch = await _git.ResolveBranchAsync(path, _selectedBranch, CancellationToken.None);
+            if (_exitRequested) return;
             _reportWriter.Open(path, branch);
         }
         catch (Exception exception)
@@ -761,8 +859,11 @@ public partial class MainWindow : Window
 
     private void HideToTray_Click(object sender, RoutedEventArgs e) => HideToTray();
 
+    private async void Exit_Click(object sender, RoutedEventArgs e) => await ExitApplicationAsync();
+
     private void HideToTray()
     {
+        _logWindow?.Hide();
         Hide();
         _trayIcon.Text = _runner.IsRunning
             ? Localization.Text("Git Reviewer - running in background", "Git Reviewer - работает в фоне")
@@ -779,7 +880,9 @@ public partial class MainWindow : Window
 
     private async Task ExitApplicationAsync()
     {
+        if (_exitRequested) return;
         _exitRequested = true;
+        IsEnabled = false;
         _manualReviewCancellation?.Cancel();
         if (_manualReviewTask is not null)
         {
@@ -799,6 +902,7 @@ public partial class MainWindow : Window
             }
         }
         await _runner.StopAsync();
+        _logWindow?.Close();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
         System.Windows.Application.Current.Shutdown();
@@ -806,11 +910,20 @@ public partial class MainWindow : Window
 
     private void SetRunningControls(bool running)
     {
+        SetRepositoryControls(!running && _manualReviewTask is not { IsCompleted: false });
         StartButton.IsEnabled = !running;
         StopButton.IsEnabled = running;
         _trayStartItem.Enabled = !running;
         _trayStopItem.Enabled = running;
         ReviewCommitButton.IsEnabled = !running && _manualReviewTask is not { IsCompleted: false };
+    }
+
+    private void SetRepositoryControls(bool enabled)
+    {
+        RepositoryPathTextBox.IsEnabled = enabled;
+        BrowseButton.IsEnabled = enabled;
+        BranchComboBox.IsEnabled = enabled;
+        RefreshBranchesButton.IsEnabled = enabled;
     }
 
     private void SetStatus(string status)
@@ -821,16 +934,60 @@ public partial class MainWindow : Window
 
     private void AppendLog(string message)
     {
+        if (LogTextBox.Text.Length > 100_000) LogTextBox.Text = LogTextBox.Text[^50_000..];
         LogTextBox.AppendText($"{DateTime.Now:HH:mm:ss} {message}{Environment.NewLine}");
         LogTextBox.ScrollToEnd();
     }
 
     private void Dispatch(Action action)
     {
+        if (_exitRequested || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
         if (Dispatcher.CheckAccess())
             action();
         else
-            Dispatcher.Invoke(action);
+        {
+            try { Dispatcher.BeginInvoke(() => { if (!_exitRequested) action(); }); }
+            catch (InvalidOperationException) { }
+        }
+    }
+
+    private void OpenLog_Click(object sender, RoutedEventArgs e)
+    {
+        if (_logWindow is null)
+        {
+            _logWindow = new LogWindow { Owner = this, Title = Localization.Text("Log", "Лог") };
+            _logWindow.Closed += (_, _) => _logWindow = null;
+        }
+        _logWindow.SetLines(_progressLines);
+        _logWindow.Show();
+        _logWindow.Activate();
+    }
+
+    private void AppendProgress(ReviewProgress progress)
+    {
+        var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
+        var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
+        var chunk = progress.TotalChunks > 0 ? $" | {progress.Chunk}/{progress.TotalChunks}" : string.Empty;
+        _progressLines.Enqueue($"{DateTime.Now:HH:mm:ss} | {model} | {commit} | {progress.Stage}{chunk}");
+        while (_progressLines.Count > 500) _progressLines.Dequeue();
+        _logWindow?.SetLines(_progressLines);
+    }
+
+    private void NotifyReviewed(CommitReviewed reviewed)
+    {
+        if (_exitRequested) return;
+        var result = reviewed.EmptyDiff
+            ? Localization.Text("Empty diff; no model request.", "Пустой diff; без запроса к модели.")
+            : reviewed.HasUnstructuredResponse
+                ? Localization.Text("Unstructured response; inspect the report.", "Неструктурированный ответ; проверьте отчет.")
+                : Localization.Format("Findings: {0}.", "Замечаний: {0}.", reviewed.FindingCount);
+        try
+        {
+            _trayIcon.ShowBalloonTip(5000, Localization.Text("Commit review completed", "Проверка коммита завершена"),
+                $"{reviewed.Sha[..Math.Min(8, reviewed.Sha.Length)]} | {reviewed.BranchRef}\n{result}",
+                reviewed.HasUnstructuredResponse ? Forms.ToolTipIcon.Warning : Forms.ToolTipIcon.Info);
+        }
+        catch (Exception) { /* Notifications are best-effort and must not affect persisted reviews. */ }
     }
 
     private static string TruncateTrayText(string value) => value[..Math.Min(value.Length, 63)];

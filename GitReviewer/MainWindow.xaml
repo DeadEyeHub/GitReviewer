@@ -35,7 +35,7 @@
 
                     <TextBlock x:Name="ProjectFolderLabel" Grid.Row="0" Grid.Column="0" Margin="0,7,12,12" Text="Project folder" />
                     <TextBox x:Name="RepositoryPathTextBox" Grid.Row="0" Grid.Column="1" Margin="0,0,8,12"
-                             VerticalContentAlignment="Center" />
+                             VerticalContentAlignment="Center" TextChanged="RepositoryPath_Changed" />
                     <Button x:Name="BrowseButton" Grid.Row="0" Grid.Column="2" Margin="0,0,0,12" Padding="18,6"
                             Content="Browse..." Click="BrowseRepository_Click" />
 
@@ -46,14 +46,16 @@
 
                     <TextBlock x:Name="ReceiveChangesLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Receive changes" />
                     <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,7,0,12">
-                        <CheckBox x:Name="PullEnabledCheckBox" Content="Run git pull --ff-only before each check" />
+                        <CheckBox x:Name="PullEnabledCheckBox" Content="Fetch before each check" />
                         <TextBlock x:Name="PullExplanationTextBlock" Margin="0,5,0,0" Foreground="#666" TextWrapping="Wrap"
-                                   Text="Enable this for a clone that tracks a remote branch. It downloads new commits into the selected folder without creating merge commits. Disable it for a local-only repository." />
+                                   Text="Fetch updates remote-tracking refs, never the checkout. Local branches are read as-is." />
                     </StackPanel>
 
-                    <TextBlock x:Name="CurrentBranchLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Current branch" />
-                    <TextBlock x:Name="BranchTextBlock" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2"
-                               Margin="0,7,0,12" FontFamily="Consolas" Text="-" />
+                    <TextBlock x:Name="CurrentBranchLabel" Grid.Row="3" Grid.Column="0" Margin="0,7,12,12" Text="Selected branch" />
+                    <ComboBox x:Name="BranchComboBox" Grid.Row="3" Grid.Column="1"
+                              Margin="0,0,8,12" SelectionChanged="Branch_Changed" />
+                    <Button x:Name="RefreshBranchesButton" Grid.Row="3" Grid.Column="2" Margin="0,0,0,12"
+                            Content="Refresh" Click="RefreshBranches_Click" />
 
                     <TextBlock Grid.Row="4" Grid.Column="0" Margin="0,7,12,12" Text="Remote" />
                     <TextBlock x:Name="RemoteTextBlock" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2"
@@ -74,21 +76,27 @@
                         <Button x:Name="BrowseSshKeyButton" Padding="16,6" Content="Browse..." Click="BrowseSshKey_Click" />
                     </StackPanel>
 
-                    <TextBlock x:Name="RemoteAccessLabel" Grid.Row="7" Grid.Column="0" Margin="0,7,12,12" Text="Remote access" />
-                    <StackPanel Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12">
+                    <TextBlock x:Name="PlinkPathLabel" Grid.Row="7" Grid.Column="0" Margin="0,7,12,12" TextWrapping="Wrap" Text="Plink executable" />
+                    <TextBox x:Name="PlinkPathTextBox" Grid.Row="7" Grid.Column="1" Margin="0,0,8,12"
+                             VerticalContentAlignment="Center" LostKeyboardFocus="SshKeyPathTextBox_LostKeyboardFocus" />
+                    <Button x:Name="BrowsePlinkButton" Grid.Row="7" Grid.Column="2" Margin="0,0,0,12" Padding="16,6"
+                            Content="Browse..." Click="BrowsePlink_Click" />
+
+                    <TextBlock x:Name="RemoteAccessLabel" Grid.Row="8" Grid.Column="0" Margin="0,7,12,12" Text="Remote access" />
+                    <StackPanel Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12">
                         <Button x:Name="TestRemoteButton" Width="180" HorizontalAlignment="Left" Padding="16,6"
                                 Content="Test repository access" Click="TestRemote_Click" />
                         <TextBlock x:Name="RemoteAccessStatusTextBlock" Margin="0,5,0,0" Foreground="#444" TextWrapping="Wrap" />
                     </StackPanel>
 
-                    <TextBlock x:Name="LanguageLabel" Grid.Row="8" Grid.Column="0" Margin="0,7,12,12" Text="Language" />
-                    <ComboBox x:Name="LanguageComboBox" Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2"
+                    <TextBlock x:Name="LanguageLabel" Grid.Row="9" Grid.Column="0" Margin="0,7,12,12" Text="Language" />
+                    <ComboBox x:Name="LanguageComboBox" Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2"
                               Width="180" HorizontalAlignment="Left" Margin="0,0,0,12"
                               SelectionChanged="LanguageComboBox_SelectionChanged" />
 
-                    <TextBlock x:Name="SelectedCommitLabel" Grid.Row="9" Grid.Column="0" Margin="0,7,12,12"
+                    <TextBlock x:Name="SelectedCommitLabel" Grid.Row="10" Grid.Column="0" Margin="0,7,12,12"
                                Text="Review selected commit" />
-                    <StackPanel Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12">
+                    <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Top">
                         <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
                                  VerticalContentAlignment="Center" ToolTip="Enter a short or full commit SHA" />
                         <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
@@ -179,7 +187,7 @@
                 </Grid>
             </TabItem>
 
-            <TabItem x:Name="LogTab" Header="Log">
+            <TabItem x:Name="LogTab" Header="Journal">
                 <Grid Margin="16">
                     <TextBox x:Name="LogTextBox" IsReadOnly="True" FontFamily="Consolas"
                              TextWrapping="Wrap" AcceptsReturn="True"
@@ -190,20 +198,22 @@
 
         <Border Grid.Row="1" BorderBrush="#D0D0D0" BorderThickness="0,1,0,0" Margin="0,14,0,0" Padding="0,14,0,0">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <StackPanel Grid.Row="0">
                     <TextBlock><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
                     <TextBlock Margin="0,4,0,0"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <WrapPanel Grid.Row="1" Margin="0,10,0,0" HorizontalAlignment="Right">
+                    <Button x:Name="OpenLogButton" Padding="12,7" Margin="0,0,8,0" Content="Log" Click="OpenLog_Click" />
                     <Button x:Name="StartButton" Padding="18,7" Margin="0,0,8,0" Content="Start" Click="Start_Click" />
                     <Button x:Name="StopButton" Padding="18,7" Margin="0,0,8,0" Content="Stop" IsEnabled="False" Click="Stop_Click" />
                     <Button x:Name="OpenReportButton" Padding="18,7" Margin="0,0,8,0" Content="Open report" Click="OpenReport_Click" />
-                    <Button x:Name="HideToTrayButton" Padding="18,7" Content="Hide to tray" Click="HideToTray_Click" />
-                </StackPanel>
+                    <Button x:Name="HideToTrayButton" Padding="18,7" Margin="0,0,8,0" Content="Hide to tray" Click="HideToTray_Click" />
+                    <Button x:Name="ExitButton" Padding="18,7" Content="Exit" Click="Exit_Click" />
+                </WrapPanel>
             </Grid>
         </Border>
     </Grid>

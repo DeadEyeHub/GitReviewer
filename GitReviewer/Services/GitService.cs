@@ -23,6 +23,32 @@ public sealed class GitService
     public async Task<string> GetHeadAsync(string repositoryPath, CancellationToken cancellationToken) =>
         (await RunRequiredAsync(repositoryPath, cancellationToken, "rev-parse", "HEAD")).Trim();
 
+    public async Task<IReadOnlyList<string>> GetBranchesAsync(string repositoryPath, CancellationToken cancellationToken)
+    {
+        var output = await RunRequiredAsync(repositoryPath, cancellationToken,
+            "for-each-ref", "--format=%(refname)%09%(symref)", "refs/heads/", "refs/remotes/");
+        return output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r').Split('\t'))
+            .Where(parts => parts.Length == 2 && parts[1].Length == 0)
+            .Select(parts => parts[0]).ToArray();
+    }
+
+    public async Task<string> ResolveBranchAsync(string repositoryPath, string selectedRef, CancellationToken cancellationToken)
+    {
+        if (selectedRef.Length == 0)
+            selectedRef = (await RunRequiredAsync(repositoryPath, cancellationToken, "symbolic-ref", "--quiet", "HEAD")).Trim();
+        if (!(await GetBranchesAsync(repositoryPath, cancellationToken)).Contains(selectedRef, StringComparer.Ordinal))
+            throw new GitException(Localization.Format("Selected branch does not exist: {0}", "Выбранная ветка не существует: {0}", selectedRef));
+        return selectedRef;
+    }
+
+    public async Task<string> GetBranchHeadAsync(string repositoryPath, string branchRef, CancellationToken cancellationToken)
+    {
+        branchRef = await ResolveBranchAsync(repositoryPath, branchRef, cancellationToken);
+        return (await RunRequiredAsync(repositoryPath, cancellationToken,
+            "rev-parse", "--verify", "--end-of-options", $"{branchRef}^{{commit}}")).Trim();
+    }
+
     public async Task<string> ResolveCommitAsync(
         string repositoryPath,
         string revision,
@@ -56,16 +82,31 @@ public sealed class GitService
         return result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? string.Empty;
     }
 
-    public async Task<GitResult> PullAsync(
+    public async Task<GitResult> FetchAsync(
         string repositoryPath,
         AppSettings settings,
         CancellationToken cancellationToken)
     {
-        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken);
-        if (remote is not null && remote.Value.Url != ".")
-            ValidateRemoteForAuthenticationMode(remote.Value.Url, settings.GitAuthenticationMode);
+        var branch = await ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch)
+            ?? throw new GitException(Localization.Text("Selected branch has no remote.", "У выбранной ветки нет remote."));
+        if (remote.Url != ".")
+            ValidateRemoteForAuthenticationMode(remote.Url, settings.GitAuthenticationMode);
+        // An explicit remote-tracking destination never updates a local branch or checkout.
+        if (remote.Name == ".")
+            return new GitResult(0, string.Empty, string.Empty);
+        if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+            return await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+                "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", remote.Name, remote.MergeReference);
         return await RunWithAuthenticationAsync(
-            repositoryPath, settings, cancellationToken, "pull", "--ff-only");
+            repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+            "--refmap=", "--", remote.Name, $"+{remote.MergeReference}:{branch}");
+    }
+
+    public async Task<string> GetSelectedRemoteSummaryAsync(string path, string branch, CancellationToken token)
+    {
+        var remote = await TryGetUpstreamRemoteAsync(path, token, branch);
+        return remote is null ? string.Empty : $"{remote.Value.Name} | {remote.Value.MergeReference}";
     }
 
     public async Task TestRemoteAccessAsync(
@@ -74,10 +115,11 @@ public sealed class GitService
         CancellationToken cancellationToken)
     {
         await ValidateRepositoryAsync(repositoryPath, cancellationToken);
-        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken)
+        var branch = await ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch)
             ?? throw new GitException(Localization.Text(
-                "The current branch does not track a remote branch.",
-                "Текущая ветка не отслеживает удаленную ветку."));
+                "The selected branch does not track a remote branch.",
+                "Выбранная ветка не отслеживает удаленную ветку."));
         if (remote.Url != ".")
             ValidateRemoteForAuthenticationMode(remote.Url, settings.GitAuthenticationMode);
 
@@ -93,19 +135,11 @@ public sealed class GitService
 
     public async Task<string> DetectAuthenticationModeAsync(
         string repositoryPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string selectedRef = "")
     {
-        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken);
-        if (remote is null)
-        {
-            var origin = await RunAsync(repositoryPath, cancellationToken,
-                "remote", "get-url", "origin");
-            if (origin.ExitCode != 0)
-                return "ssh-agent";
-            return origin.Output.Trim().StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                ? "https"
-                : "ssh-agent";
-        }
+        var branch = await ResolveBranchAsync(repositoryPath, selectedRef, cancellationToken);
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch);
+        if (remote is null) return "ssh-agent";
 
         return remote.Value.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
             ? "https"
@@ -254,7 +288,7 @@ public sealed class GitService
         if (settings.GitAuthenticationMode == "putty-key")
         {
             var puttyKeyPath = GetPrivateKeyPath(settings, "PuTTY");
-            var plinkPath = FindPlinkExecutable();
+            var plinkPath = FindPlinkExecutable(settings.PlinkPath);
             startInfo.Environment["GIT_SSH_COMMAND"] =
                 $"{QuoteForShell(plinkPath.Replace('\\', '/'))} -ssh -batch -i {QuoteForShell(puttyKeyPath.Replace('\\', '/'))}";
             startInfo.Environment["GIT_SSH_VARIANT"] = "plink";
@@ -304,8 +338,22 @@ public sealed class GitService
         return keyPath;
     }
 
-    private static string FindPlinkExecutable()
+    private static string FindPlinkExecutable(string configuredPath)
     {
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            if (configuredPath.IndexOfAny(['\r', '\n', '\0']) >= 0)
+                throw new GitException(Localization.Text(
+                    "The Plink path contains invalid characters.",
+                    "Путь к Plink содержит недопустимые символы."));
+            var fullPath = Path.GetFullPath(configuredPath.Trim());
+            if (!File.Exists(fullPath))
+                throw new GitException(Localization.Format(
+                    "Plink executable not found: {0}",
+                    "Исполняемый файл Plink не найден: {0}", fullPath));
+            return fullPath;
+        }
+
         var candidates = new List<string>();
         foreach (var environmentVariable in new[] { "ProgramFiles", "ProgramFiles(x86)" })
         {
@@ -319,19 +367,40 @@ public sealed class GitService
             .Select(directory => Path.Combine(directory.Trim('"'), "plink.exe")));
         var executable = candidates.FirstOrDefault(File.Exists);
         return executable ?? throw new GitException(Localization.Text(
-            "plink.exe was not found. Install PuTTY or add its folder to PATH.",
-            "Файл plink.exe не найден. Установите PuTTY или добавьте его папку в PATH."));
+            "plink.exe was not found. Select its path, install PuTTY, or add its folder to PATH.",
+            "Файл plink.exe не найден. Укажите путь, установите PuTTY или добавьте его папку в PATH."));
     }
 
     private async Task<(string Name, string Url, string MergeReference)?> TryGetUpstreamRemoteAsync(
         string repositoryPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string branchRef)
     {
-        var branchResult = await RunAsync(repositoryPath, cancellationToken,
-            "branch", "--show-current");
-        var branch = branchResult.Output.Trim();
-        if (branchResult.ExitCode != 0 || branch.Length == 0)
+        // Git supplies the remote and source ref, including custom fetch refspecs.
+        if (branchRef.StartsWith("refs/remotes/", StringComparison.Ordinal))
+        {
+            var remotes = (await RunRequiredAsync(repositoryPath, cancellationToken, "remote"))
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            foreach (var name in remotes.OrderByDescending(value => value.Length))
+            {
+                var specs = await RunAsync(repositoryPath, cancellationToken, "config", "--get-all", $"remote.{name}.fetch");
+                foreach (var spec in specs.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var parts = spec.TrimStart('+').Split(':');
+                    if (parts.Length != 2 || !parts[0].StartsWith("refs/heads/", StringComparison.Ordinal)) continue;
+                    string? source = null;
+                    var star = parts[1].IndexOf('*');
+                    if (star < 0 && parts[1] == branchRef) source = parts[0];
+                    else if (star >= 0 && branchRef.StartsWith(parts[1][..star], StringComparison.Ordinal) &&
+                             branchRef.EndsWith(parts[1][(star + 1)..], StringComparison.Ordinal) &&
+                             branchRef.Length >= parts[1].Length - 1)
+                        source = parts[0].Replace("*", branchRef.Substring(star, branchRef.Length - parts[1].Length + 1));
+                    if (source is not null)
+                        return (name, (await RunRequiredAsync(repositoryPath, cancellationToken, "remote", "get-url", name)).Trim(), source);
+                }
+            }
             return null;
+        }
+        var branch = branchRef["refs/heads/".Length..];
 
         var remoteResult = await RunAsync(repositoryPath, cancellationToken,
             "config", "--get", $"branch.{branch}.remote");
@@ -341,7 +410,7 @@ public sealed class GitService
         var mergeResult = await RunAsync(repositoryPath, cancellationToken,
             "config", "--get", $"branch.{branch}.merge");
         var mergeReference = mergeResult.Output.Trim();
-        if (mergeResult.ExitCode != 0 || mergeReference.Length == 0)
+        if (mergeResult.ExitCode != 0 || !mergeReference.StartsWith("refs/heads/", StringComparison.Ordinal))
             return null;
         if (remoteName == ".")
             return (remoteName, ".", mergeReference);
@@ -360,12 +429,12 @@ public sealed class GitService
     {
         if (mode == "https" && !remoteUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             throw new GitException(Localization.Text(
-                "HTTPS authentication requires an origin URL that starts with https://.",
-                "Для HTTPS-аутентификации адрес origin должен начинаться с https://."));
+                "HTTPS authentication requires a selected remote URL that starts with https://.",
+                "Для HTTPS-аутентификации адрес выбранного remote должен начинаться с https://."));
         if (mode != "https" && remoteUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             throw new GitException(Localization.Text(
-                "SSH authentication requires an SSH origin URL, for example git@github.com:user/repository.git.",
-                "Для SSH-аутентификации нужен SSH-адрес origin, например git@github.com:user/repository.git."));
+                "SSH authentication requires an SSH remote URL, for example git@github.com:user/repository.git.",
+                "Для SSH-аутентификации нужен SSH-адрес remote, например git@github.com:user/repository.git."));
         if (mode != "https" && !IsSshRemote(remoteUrl))
             throw new GitException(Localization.Text(
                 "The upstream remote does not use a supported SSH URL.",

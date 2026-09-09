@@ -37,8 +37,6 @@ public sealed class ReportWriter
             if (File.Exists(path))
             {
                 existing = await File.ReadAllTextAsync(path, cancellationToken);
-                if (!manualReview && existing.Contains(marker, StringComparison.Ordinal))
-                    return;
             }
 
             var text = new StringBuilder();
@@ -48,6 +46,7 @@ public sealed class ReportWriter
             text.AppendLine(marker)
                 .AppendLine($"## `{commit.Sha[..Math.Min(8, commit.Sha.Length)]}` - {Escape(commit.Subject)}{ManualLabel(manualReview)}")
                 .AppendLine()
+                .AppendLine(Localization.Format("- Branch: {0}", "- Ветка: {0}", Escape(branch)))
                 .AppendLine(Localization.Format("- Author: {0}", "- Автор: {0}", Escape(commit.Author)))
                 .AppendLine(Localization.Format(
                     "- Date: {0:yyyy-MM-dd HH:mm:ss zzz}",
@@ -87,7 +86,37 @@ public sealed class ReportWriter
             }
 
             var temporaryPath = path + ".tmp";
-            await File.WriteAllTextAsync(temporaryPath, existing + text, Encoding.UTF8, cancellationToken);
+            var start = existing.Length;
+            var end = existing.Length;
+            if (!manualReview)
+            {
+                // A cursor-save retry may produce a different model result. Replace its
+                // automatic entry, preserving adjacent entries and markers inside code fences.
+                var offset = 0;
+                var inFence = false;
+                var lines = existing.Split('\n');
+                for (var index = 0; index < lines.Length; index++)
+                {
+                    var rawLine = lines[index];
+                    var line = rawLine.TrimEnd('\r');
+                    if (line.StartsWith("```", StringComparison.Ordinal)) inFence = !inFence;
+                    if (!inFence && index + 1 < lines.Length &&
+                        lines[index + 1].StartsWith("## `", StringComparison.Ordinal))
+                    {
+                        if (start == existing.Length && line == marker) start = offset;
+                        else if (start != existing.Length &&
+                                 (line.StartsWith("<!-- commit:", StringComparison.Ordinal) ||
+                                  line.StartsWith("<!-- manual-review:", StringComparison.Ordinal)))
+                        {
+                            end = offset;
+                            break;
+                        }
+                    }
+                    offset += rawLine.Length + 1;
+                }
+            }
+            await File.WriteAllTextAsync(temporaryPath,
+                existing[..start] + text + existing[end..], Encoding.UTF8, cancellationToken);
             File.Move(temporaryPath, path, true);
         }
         finally
@@ -108,6 +137,8 @@ public sealed class ReportWriter
 
     private static string DescribeResult(ReviewResult result)
     {
+        if (result.EmptyDiff)
+            return Localization.Text("empty diff; no model request", "пустой diff; запрос к модели не выполнялся");
         if (result.Findings.Count > 0)
             return Localization.Format(
                 "potential bugs: {0}",

@@ -21,6 +21,9 @@ public sealed class ConfigurationStore
                 case "repository_path":
                     settings.RepositoryPath = value;
                     break;
+                case "branch_ref":
+                    settings.BranchRef = value;
+                    break;
                 case "poll_interval_seconds" when int.TryParse(value, out var seconds):
                     settings.PollIntervalSeconds = Math.Clamp(seconds, 5, 86_400);
                     break;
@@ -38,6 +41,9 @@ public sealed class ConfigurationStore
                 case "ssh_private_key_path":
                     settings.SshPrivateKeyPath = value;
                     break;
+                case "plink_path":
+                    settings.PlinkPath = value;
+                    break;
             }
         }
 
@@ -48,11 +54,13 @@ public sealed class ConfigurationStore
     {
         var text = new StringBuilder()
             .AppendLine($"repository_path={settings.RepositoryPath}")
+            .AppendLine($"branch_ref={settings.BranchRef}")
             .AppendLine($"poll_interval_seconds={settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture)}")
             .AppendLine($"pull_enabled={settings.PullEnabled.ToString().ToLowerInvariant()}")
             .AppendLine($"language={settings.Language}")
             .AppendLine($"git_authentication_mode={settings.GitAuthenticationMode}")
             .AppendLine($"ssh_private_key_path={settings.SshPrivateKeyPath}")
+            .AppendLine($"plink_path={settings.PlinkPath}")
             .ToString();
         File.WriteAllText(AppPaths.SettingsConfig, text, Encoding.UTF8);
     }

@@ -5,9 +5,9 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 
 ## Features
 
-- Reviews the current `HEAD` on the first connection without scanning older commits.
-- Runs `git pull --ff-only` and reviews each newly received commit separately.
-- Supports local-only repositories with automatic pull disabled.
+- Reviews the selected local or remote-tracking branch tip on first connection, without scanning older commits.
+- Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
+- Supports local-only repositories with automatic fetch disabled.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Reviews added, modified, and deleted lines from each commit diff.
 - Allows manual review of any commit by its short or full SHA.
@@ -16,6 +16,8 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Provides English and Russian user interfaces and prompts.
 - Continues monitoring in the Windows system tray after the main window is closed.
 - Writes findings to a Markdown report with commit, file, and line information.
+- Provides a separate lifecycle **Log** window and a **Journal** (**Журнал**) tab.
+- Requests a tray notification for each completed manual or automatic commit review, including no findings.
 
 ## Requirements
 
@@ -40,7 +42,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-1.2.0-win-x64.exe
+dist\GitReviewer-1.3.0-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -51,20 +53,39 @@ After launch, select a Git repository, configure a model profile, test the
 connection, and click **Start**.
 
 Closing or minimizing the window hides it in the system tray. Monitoring keeps
-running in the background. Use **Exit** from the tray menu to stop the process.
+running in the background. Use **Exit** (**Выход**) in the main window or tray
+menu to cancel and await manual review, stop background monitoring, close Log,
+remove the tray icon, and shut down the application.
 
-## Git Pull Behavior
+## Branch Selection
 
-When automatic pull is enabled, the application runs this command in the
-selected repository before each check:
+Choose an existing folder, then select a full ref in **Selected branch**. Use
+**Refresh** after creating or fetching branches outside the app. Folder changes
+reload the list; stale asynchronous results cannot replace newer selections.
+`refs/heads/main` and `refs/remotes/origin/main` are different selections, and Git
+ref names are case-sensitive. Symbolic remote HEAD aliases are excluded.
 
-```powershell
-git pull --ff-only
-```
+The selection is saved as `branch_ref` in `settings.conf`. Older configurations
+without this setting default to the current local branch. A missing selected
+branch is an error, never a silent switch to HEAD. A detached checkout requires
+an explicit branch selection. Manual SHA review can still inspect any existing
+commit, not just commits reachable from that branch; its report uses the selected ref.
 
-The selected branch must track a remote branch. `--ff-only` downloads linear
-updates without allowing the application to create merge commits. Disable this
-option for a repository that exists only locally.
+With **Run git fetch before each check** enabled, the selected remote-tracking
+ref is fetched from its configured remote/source ref. For a local selection,
+only its upstream objects are fetched; the local branch is deliberately not
+advanced. Select `refs/remotes/...` to monitor incoming remote commits. Fetch
+uses explicit refspecs and disables configured ref mappings so it cannot update
+local branches. Disable fetch for local-only branches without an upstream.
+The legacy configuration key `pull_enabled` is retained, but now means fetch.
+
+Automatic cursors and report names use the full case-sensitive ref. State files
+record `SchemaVersion: 1`. Unversioned legacy files are migrated atomically on
+load: every short local branch name is converted to a full ref, including names
+that themselves begin with `refs/heads/`. Versioned keys are never reinterpreted
+as short names, and differently cased keys are not merged. Unknown schema versions
+are rejected without rewriting the file. Old report files are retained, while
+new reports use full-ref identities.
 
 The application does not clone repositories. Select an existing local Git
 working directory, with or without a configured remote.
@@ -79,8 +100,13 @@ The **Project** tab provides four authentication modes:
   path is stored in `settings.conf`; the key is not copied. Add the matching
   public key to the Git server. Use SSH Agent for an encrypted key.
 - **PuTTY Key File (.ppk)** runs PuTTY `plink.exe` in batch mode with the
-  selected `.ppk` file. Install PuTTY in its standard location or add it to
-  `PATH`. Load an encrypted key into Pageant before starting the review.
+  selected `.ppk` file. Set **Plink executable** using **Browse...** or type its
+  path without surrounding quotes. The path is saved as `plink_path` in
+  `settings.conf` and used for access tests and background fetch; spaces are
+  supported. Leave it empty to search the standard PuTTY installation folders,
+  then `PATH`. A nonempty missing path reports an error rather than falling back.
+  This setting is enabled only for PuTTY authentication and retained when switching
+  modes. Load an encrypted key into Pageant before starting the review.
 - **HTTPS** uses credentials already stored by Git Credential Manager. GitHub
   requires a personal access token instead of an account password.
 
@@ -102,8 +128,9 @@ The **Test repository access** button runs:
 git ls-remote --exit-code <upstream-remote> <tracked-branch-ref>
 ```
 
-The upstream remote is read from the current branch, so the test uses the same
-remote as `git pull`. SSH Agent mode explicitly uses Windows OpenSSH Client and
+The remote and source ref are resolved from the selected branch, so the test
+uses the same remote as fetch (including non-origin remotes and custom fetch mappings).
+SSH Agent mode explicitly uses Windows OpenSSH Client and
 the Windows `ssh-agent` service instead of Git for Windows' bundled SSH client.
 SSH connections run non-interactively. OpenSSH requires the server to already
 exist in the user's `known_hosts` file; PuTTY uses its own host-key cache.
@@ -113,7 +140,7 @@ passphrase or an HTTPS token itself.
 
 ## Review Behavior
 
-On the first connection, only the current `HEAD` is reviewed against its first
+On the first connection, only the selected branch tip is reviewed against its first
 parent. Earlier commits are not sent to the model. After that, the last
 successfully reviewed SHA is stored in `state.json`, and only newer commits are
 processed.
@@ -121,6 +148,31 @@ processed.
 Manual review accepts a short or full hexadecimal commit SHA. It writes a
 separate report entry and does not change the automatic monitoring position in
 `state.json`. Stop automatic monitoring before starting a manual review.
+
+## Journal And Log
+
+The former Log tab is now **Journal** (**Журнал**) and retains general messages.
+The main window's **Log** (**Лог**) button opens a separate window containing the
+latest 500 lifecycle entries: model and commit, diff preparation, chunk N/M,
+request, waiting, response received, parsing, report writing, cursor saving,
+completion, failure, or cancellation. Stage identifiers are language-independent.
+This is not token streaming or internal model reasoning. No prompts, diffs,
+response bodies, API keys, or authentication details are included in this window.
+Closing it does not interrupt review; reopening restores the bounded history.
+Hiding the main window also hides Log, and exiting the app closes it.
+
+After the report is written (and the automatic cursor saved), the app requests
+one tray balloon per completed commit, including `NO_BUGS`. Unstructured replies
+are explicitly marked as requiring report inspection; empty diffs are marked as
+not sent to the model, rather than claiming no bugs. Failed or canceled reviews
+do not generate completion notifications. Notification failures do not affect
+review state. Windows notification settings may suppress or coalesce balloons.
+
+If cursor saving fails or is canceled after report writing, the next automatic
+attempt may receive a different model result. It atomically replaces that commit's
+automatic report entry before saving the cursor and publishing completion, so
+the notification matches the persisted outcome without duplicate entries.
+Other commits and manual review entries are preserved.
 
 The model returns plain text blocks:
 
@@ -185,17 +237,26 @@ diff chunking or output limits. Missing metadata does not prevent model selectio
 Editing connection details or switching profiles clears discovered metadata;
 responses from requests started before form edits or newer operations are ignored.
 
-### Cross-Platform Client Checks
+### Focused Checks
 
-The dependency-free .NET 10 test executable links the production client source
-and uses a fake HTTP handler (no server or credentials required):
+The existing ignored `GitReviewer.Tests` project links production services and
+uses a fake HTTP handler, isolated data paths, and temporary Git repositories.
+Its extended Git transport fixture runs on Linux using a local SSH shim; no
+server or credentials are required:
 
 ```sh
 dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
 ```
 
-Run this command from `GitReviewer`. The WPF project can be built on Linux with
-`dotnet build`, but running and interactively checking the GUI requires Windows.
+Run this command from `GitReviewer`. Tests cover case-sensitive refs, custom
+remote mappings, dirty checkout preservation, cursor migration, manual and
+automatic completion, chunk progress, failures, and cancellation. Plink checks
+cover path persistence, shell-safe custom paths, blank-path detection, missing
+paths, and background fetch. In-flight manual and automatic model requests are
+also checked for clean cancellation without completion notifications. This local
+test project is ignored and is not included in the production distribution.
+The WPF project can be built on Linux with `dotnet build`, but running and
+interactively checking the GUI and tray notifications requires Windows.
 
 ## User Data
 
@@ -209,7 +270,7 @@ The directory contains:
 
 ```text
 models.conf          Model profiles and optional API keys
-settings.conf        Repository, authentication, interval, pull, and language
+settings.conf        Repository, branch ref, authentication, interval, fetch, language
 system-prompt.txt    Editable system prompt
 state.json           Last reviewed commit for each repository and branch
 reports\             Markdown review reports

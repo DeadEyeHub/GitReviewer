@@ -14,10 +14,13 @@ public sealed class ReviewRunner
     private Task? _runTask;
     private Task? _stopTask;
     private bool _manualReviewActive;
+    private string _activeCommit = string.Empty;
 
     public event Action<string>? Log;
     public event Action<string>? StatusChanged;
     public event Action<string>? CommitChanged;
+    public event Action<ReviewProgress>? Progress;
+    public event Action<CommitReviewed>? Reviewed;
     public bool IsRunning
     {
         get
@@ -67,7 +70,7 @@ public sealed class ReviewRunner
             _stopTask = completion.Task;
             _cancellation.Cancel();
             _ = FinishStopAsync(_cancellation, _runTask, completion);
-            return _stopTask;
+            return completion.Task;
         }
     }
 
@@ -88,18 +91,30 @@ public sealed class ReviewRunner
 
         try
         {
+            _activeCommit = string.Empty;
             var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
             await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
-            var branch = await _git.GetBranchAsync(repositoryPath, cancellationToken);
+            var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
             var sha = await _git.ResolveCommitAsync(repositoryPath, revision, cancellationToken);
             var result = await AnalyzeAndReportAsync(
                 repositoryPath, branch, sha, profile.Clone(), true, cancellationToken);
+            Complete(repositoryPath, branch, sha, profile, result, true, cancellationToken);
             StatusChanged?.Invoke(Localization.Text("Manual review completed", "Ручная проверка завершена"));
             Log?.Invoke(Localization.Format(
                 "Selected commit {0} reviewed, findings: {1}.",
                 "Выбранный коммит {0} проверен, замечаний: {1}.",
                 Short(sha), result.Findings.Count));
             return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            Emit(ReviewStage.Canceled, profile, _activeCommit);
+            throw;
+        }
+        catch
+        {
+            Emit(ReviewStage.Failed, profile, _activeCommit);
+            throw;
         }
         finally
         {
@@ -148,6 +163,7 @@ public sealed class ReviewRunner
         {
             try
             {
+                _activeCommit = string.Empty;
                 await RunCycleAsync(settings, profile, cancellationToken);
                 StatusChanged?.Invoke(Localization.Format(
                     "Waiting {0} sec.",
@@ -156,10 +172,12 @@ public sealed class ReviewRunner
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                Emit(ReviewStage.Canceled, profile, _activeCommit);
                 throw;
             }
             catch (Exception exception)
             {
+                Emit(ReviewStage.Failed, profile, _activeCommit);
                 StatusChanged?.Invoke(Localization.Text("Error", "Ошибка"));
                 Log?.Invoke(Localization.Format("Error: {0}", "Ошибка: {0}", exception.Message));
             }
@@ -175,13 +193,27 @@ public sealed class ReviewRunner
     {
         var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
         await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
-        var branch = await _git.GetBranchAsync(repositoryPath, cancellationToken);
+        var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
         var stateKey = $"{repositoryPath}|{branch}";
         var state = await _stateStore.LoadAsync(cancellationToken);
 
+        if (settings.PullEnabled)
+        {
+            StatusChanged?.Invoke(Localization.Text("Running git fetch", "Выполняется git fetch"));
+            var fetchSettings = new AppSettings
+            {
+                BranchRef = branch, GitAuthenticationMode = settings.GitAuthenticationMode,
+                SshPrivateKeyPath = settings.SshPrivateKeyPath, PlinkPath = settings.PlinkPath
+            };
+            var fetch = await _git.FetchAsync(repositoryPath, fetchSettings, cancellationToken);
+            if (fetch.ExitCode != 0)
+                throw new GitException(Localization.Text("Git fetch failed.", "Git fetch не выполнен."));
+            Log?.Invoke(Localization.Text("Git fetch completed.", "Git fetch выполнен."));
+        }
+
         if (!state.LastReviewedCommits.TryGetValue(stateKey, out var previousCommit))
         {
-            var initialHead = await _git.GetHeadAsync(repositoryPath, cancellationToken);
+            var initialHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
             Log?.Invoke(Localization.Format(
                 "First connection: reviewing current commit {0}.",
                 "Первое подключение: проверяется текущий коммит {0}.",
@@ -190,29 +222,14 @@ public sealed class ReviewRunner
             previousCommit = initialHead;
         }
 
-        if (settings.PullEnabled)
-        {
-            StatusChanged?.Invoke(Localization.Text("Running git pull", "Выполняется git pull"));
-            var pull = await _git.PullAsync(repositoryPath, settings, cancellationToken);
-            if (pull.ExitCode == 0)
-                Log?.Invoke(string.IsNullOrWhiteSpace(pull.Output)
-                    ? Localization.Text("Git pull completed.", "Git pull выполнен.")
-                    : pull.Output.Trim());
-            else
-                Log?.Invoke(Localization.Format(
-                    "Git pull failed: {0}",
-                    "Git pull не выполнен: {0}",
-                    pull.Error.Trim()));
-        }
-
-        var head = await _git.GetHeadAsync(repositoryPath, cancellationToken);
+        var head = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
         if (head.Equals(previousCommit, StringComparison.Ordinal))
             return;
 
         if (!await _git.IsAncestorAsync(repositoryPath, previousCommit, head, cancellationToken))
             throw new GitException(Localization.Text(
-                "History or branch changed: the saved commit is not an ancestor of HEAD.",
-                "История или ветка изменена: сохраненный коммит не является предком HEAD."));
+                "History changed: the saved commit is not an ancestor of the selected branch tip.",
+                "История изменена: сохраненный коммит не является предком вершины выбранной ветки."));
 
         var commits = await _git.GetCommitsAfterAsync(repositoryPath, previousCommit, head, cancellationToken);
         foreach (var sha in commits)
@@ -230,7 +247,9 @@ public sealed class ReviewRunner
     {
         var result = await AnalyzeAndReportAsync(repositoryPath, branch, sha, profile, false, cancellationToken);
         state.LastReviewedCommits[stateKey] = sha;
+        Emit(ReviewStage.SavingCursor, profile, sha);
         await _stateStore.SaveAsync(state, cancellationToken);
+        Complete(repositoryPath, branch, sha, profile, result, false, cancellationToken);
         Log?.Invoke(Localization.Format(
             "Commit {0} reviewed, findings: {1}.",
             "Коммит {0} проверен, замечаний: {1}.",
@@ -245,17 +264,21 @@ public sealed class ReviewRunner
         bool manualReview,
         CancellationToken cancellationToken)
     {
+        _activeCommit = sha;
         StatusChanged?.Invoke(Localization.Format("Reviewing {0}", "Проверяется {0}", Short(sha)));
         CommitChanged?.Invoke(Short(sha));
+        Emit(ReviewStage.Started, profile, sha);
 
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
+        Emit(ReviewStage.PreparingDiff, profile, sha);
         var diff = await _git.GetDiffAsync(repositoryPath, sha, cancellationToken);
-        var result = new ReviewResult();
+        var result = new ReviewResult { EmptyDiff = string.IsNullOrWhiteSpace(diff) };
         if (!string.IsNullOrWhiteSpace(diff))
         {
             var chunks = DiffChunker.Split(diff);
             for (var index = 0; index < chunks.Count; index++)
             {
+                Emit(ReviewStage.Chunk, profile, sha, index + 1, chunks.Count);
                 var chunkHeader = chunks.Count == 1
                     ? string.Empty
                     : Localization.Format(
@@ -263,7 +286,9 @@ public sealed class ReviewRunner
                         "Фрагмент diff {0} из {1}. Проверяй этот фрагмент независимо.\n\n",
                         index + 1, chunks.Count);
                 var response = await _model.ReviewAsync(
-                    profile, commit, chunkHeader + chunks[index], _configuration.LoadPrompt(), cancellationToken);
+                    profile, commit, chunkHeader + chunks[index], _configuration.LoadPrompt(), cancellationToken,
+                    stage => Emit(stage, profile, sha, index + 1, chunks.Count));
+                Emit(ReviewStage.Parsing, profile, sha, index + 1, chunks.Count);
                 var chunkResult = ReviewParser.Parse(response);
                 foreach (var finding in chunkResult.Findings)
                 {
@@ -284,10 +309,34 @@ public sealed class ReviewRunner
             }
         }
 
+        Emit(ReviewStage.Report, profile, sha);
         await _reportWriter.AppendAsync(
             repositoryPath, branch, commit, result, manualReview, cancellationToken);
         return result;
     }
 
     private static string Short(string sha) => sha[..Math.Min(8, sha.Length)];
+
+    private void Emit(ReviewStage stage, ModelProfile profile, string sha, int chunk = 0, int total = 0) =>
+        Publish(Progress, new ReviewProgress(stage, profile.Model, sha, chunk, total));
+
+    private void Complete(string path, string branch, string sha, ModelProfile profile,
+        ReviewResult result, bool manual, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Emit(ReviewStage.Completed, profile, sha);
+        Publish(Reviewed, new CommitReviewed(path, branch, sha, result.Findings.Count,
+            result.UnstructuredResponse is not null, result.EmptyDiff, manual));
+    }
+
+    private static void Publish<T>(Action<T>? handlers, T value)
+    {
+        if (handlers is null) return;
+        foreach (Action<T> handler in handlers.GetInvocationList())
+        {
+            // Observers must not turn a persisted review into a failed operation.
+            try { handler(value); }
+            catch { }
+        }
+    }
 }

@@ -75,7 +75,8 @@ public sealed class ModelClient
         CommitInfo commit,
         string diff,
         string systemPrompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<ReviewStage>? progress = null)
     {
         var userPrompt = new StringBuilder()
             .AppendLine(Localization.Text(
@@ -112,14 +113,15 @@ public sealed class ModelClient
             .Append(diff)
             .ToString();
 
-        return SendAsync(profile, systemPrompt, userPrompt, cancellationToken);
+        return SendAsync(profile, systemPrompt, userPrompt, cancellationToken, progress);
     }
 
     private async Task<string> SendAsync(
         ModelProfile profile,
         string systemPrompt,
         string userPrompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<ReviewStage>? progress = null)
     {
         ValidateProfile(profile);
         var payload = new
@@ -141,8 +143,12 @@ public sealed class ModelClient
         if (apiKey.Length > 0)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        progress?.Invoke(ReviewStage.Request);
+        var responseTask = _httpClient.SendAsync(request, cancellationToken);
+        progress?.Invoke(ReviewStage.Waiting);
+        using var response = await responseTask;
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        progress?.Invoke(ReviewStage.Response);
         if (!response.IsSuccessStatusCode)
         {
             var detail = body.Length > 1000 ? body[..1000] : body;

@@ -16,10 +16,20 @@ public sealed class ReviewResult
 {
     public List<Finding> Findings { get; } = [];
     public string? UnstructuredResponse { get; set; }
+    public bool EmptyDiff { get; set; }
 }
 
 public sealed class RepositoryState
 {
+    public const int CurrentSchemaVersion = 1;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Dictionary<string, string> LastReviewedCommits { get; set; } =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(StringComparer.Ordinal);
 }
+
+public enum ReviewStage { Started, PreparingDiff, Chunk, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled }
+
+public sealed record ReviewProgress(ReviewStage Stage, string Model, string Commit, int Chunk = 0, int TotalChunks = 0);
+
+public sealed record CommitReviewed(string RepositoryPath, string BranchRef, string Sha,
+    int FindingCount, bool HasUnstructuredResponse, bool EmptyDiff, bool Manual);
