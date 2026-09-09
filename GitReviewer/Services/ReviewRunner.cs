@@ -271,42 +271,15 @@ public sealed class ReviewRunner
 
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
         Emit(ReviewStage.PreparingDiff, profile, sha);
-        var diff = await _git.GetDiffAsync(repositoryPath, sha, cancellationToken);
-        var result = new ReviewResult { EmptyDiff = string.IsNullOrWhiteSpace(diff) };
-        if (!string.IsNullOrWhiteSpace(diff))
+        var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken);
+        var result = new ReviewResult { EmptyDiff = await tools.IsEmptyAsync(cancellationToken) };
+        if (!result.EmptyDiff)
         {
-            var chunks = DiffChunker.Split(diff);
-            for (var index = 0; index < chunks.Count; index++)
-            {
-                Emit(ReviewStage.Chunk, profile, sha, index + 1, chunks.Count);
-                var chunkHeader = chunks.Count == 1
-                    ? string.Empty
-                    : Localization.Format(
-                        "Diff fragment {0} of {1}. Review this fragment independently.\n\n",
-                        "Фрагмент diff {0} из {1}. Проверяй этот фрагмент независимо.\n\n",
-                        index + 1, chunks.Count);
-                var response = await _model.ReviewAsync(
-                    profile, commit, chunkHeader + chunks[index], _configuration.LoadPrompt(), cancellationToken,
-                    stage => Emit(stage, profile, sha, index + 1, chunks.Count));
-                Emit(ReviewStage.Parsing, profile, sha, index + 1, chunks.Count);
-                var chunkResult = ReviewParser.Parse(response);
-                foreach (var finding in chunkResult.Findings)
-                {
-                    if (!result.Findings.Contains(finding))
-                        result.Findings.Add(finding);
-                }
-
-                if (chunkResult.UnstructuredResponse is not null)
-                {
-                    var label = chunks.Count == 1
-                        ? string.Empty
-                        : Localization.Format("Fragment {0}:\n", "Фрагмент {0}:\n", index + 1);
-                    result.UnstructuredResponse = string.Join(
-                        Environment.NewLine + Environment.NewLine,
-                        new[] { result.UnstructuredResponse, label + chunkResult.UnstructuredResponse }
-                            .Where(value => !string.IsNullOrWhiteSpace(value)));
-                }
-            }
+            var response = await _model.ReviewAsync(profile, tools, branch, _configuration.LoadPrompt(), cancellationToken,
+                stage => Emit(stage, profile, sha), message =>
+                    Publish(Progress, new ReviewProgress(ReviewStage.Tool, profile.Model, sha, Detail: message)));
+            Emit(ReviewStage.Parsing, profile, sha);
+            result = ReviewParser.Parse(response);
         }
 
         Emit(ReviewStage.Report, profile, sha);
@@ -317,8 +290,8 @@ public sealed class ReviewRunner
 
     private static string Short(string sha) => sha[..Math.Min(8, sha.Length)];
 
-    private void Emit(ReviewStage stage, ModelProfile profile, string sha, int chunk = 0, int total = 0) =>
-        Publish(Progress, new ReviewProgress(stage, profile.Model, sha, chunk, total));
+    private void Emit(ReviewStage stage, ModelProfile profile, string sha) =>
+        Publish(Progress, new ReviewProgress(stage, profile.Model, sha));
 
     private void Complete(string path, string branch, string sha, ModelProfile profile,
         ReviewResult result, bool manual, CancellationToken cancellationToken)

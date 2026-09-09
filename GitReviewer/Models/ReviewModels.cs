@@ -27,9 +27,9 @@ public sealed class RepositoryState
         new(StringComparer.Ordinal);
 }
 
-public enum ReviewStage { Started, PreparingDiff, Chunk, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled }
+public enum ReviewStage { Started, PreparingDiff, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled, Tool }
 
-public sealed record ReviewProgress(ReviewStage Stage, string Model, string Commit, int Chunk = 0, int TotalChunks = 0);
+public sealed record ReviewProgress(ReviewStage Stage, string Model, string Commit, string Detail = "");
 
 public sealed record CommitReviewed(string RepositoryPath, string BranchRef, string Sha,
     int FindingCount, bool HasUnstructuredResponse, bool EmptyDiff, bool Manual);

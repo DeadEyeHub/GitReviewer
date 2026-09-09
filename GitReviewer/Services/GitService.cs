@@ -174,8 +174,11 @@ public sealed class GitService
         CancellationToken cancellationToken)
     {
         const string format = "%H%x1f%an%x1f%aI%x1f%s";
-        var output = (await RunRequiredAsync(repositoryPath, cancellationToken,
-            "show", "-s", $"--format={format}", sha)).Trim();
+        if (sha.Length != 40 || !sha.All(Uri.IsHexDigit)) throw new GitException("A full commit SHA is required.");
+        var metadata = await ReadPageAsync(repositoryPath, 0, 16_000, cancellationToken,
+            "show", "--no-show-signature", "-s", $"--format={format}", sha, "--");
+        if (metadata.ExitCode != 0 || metadata.HasMore) throw new GitException("Commit metadata unavailable or exceeds output limit.");
+        var output = metadata.Output.Trim();
         var parts = output.Split('\x1f', 4);
         if (parts.Length != 4 || !DateTimeOffset.TryParse(parts[2], CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out var date))
@@ -184,25 +187,6 @@ public sealed class GitService
                 "Не удалось прочитать данные коммита {0}.",
                 sha));
         return new CommitInfo(parts[0], parts[1], date, parts[3]);
-    }
-
-    public async Task<string> GetDiffAsync(
-        string repositoryPath,
-        string sha,
-        CancellationToken cancellationToken)
-    {
-        var parents = (await RunRequiredAsync(repositoryPath, cancellationToken,
-            "rev-list", "--parents", "-n", "1", sha))
-            .Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries);
-
-        if (parents.Length > 1)
-        {
-            return await RunRequiredAsync(repositoryPath, cancellationToken,
-                "diff", "--no-ext-diff", "--no-color", "--unified=5", parents[1], sha, "--");
-        }
-
-        return await RunRequiredAsync(repositoryPath, cancellationToken,
-            "show", "--format=", "--root", "--no-ext-diff", "--no-color", "--unified=5", sha, "--");
     }
 
     private static async Task<string> RunRequiredAsync(
@@ -222,21 +206,29 @@ public sealed class GitService
         string repositoryPath,
         CancellationToken cancellationToken,
         params string[] arguments)
-        => await RunCoreAsync(repositoryPath, null, cancellationToken, arguments);
+        => await RunCoreAsync(repositoryPath, null, cancellationToken, null, arguments);
 
     private static async Task<GitResult> RunWithAuthenticationAsync(
         string repositoryPath,
         AppSettings settings,
         CancellationToken cancellationToken,
         params string[] arguments)
-        => await RunCoreAsync(repositoryPath, settings, cancellationToken, arguments);
+        => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, arguments);
+
+    internal static Task<GitResult> ReadPageAsync(string repositoryPath, int offset, int limit,
+        CancellationToken token, params string[] arguments) =>
+        RunCoreAsync(repositoryPath, null, token, (offset, limit), arguments);
 
     private static async Task<GitResult> RunCoreAsync(
         string repositoryPath,
         AppSettings? settings,
         CancellationToken cancellationToken,
+        (int Offset, int Limit)? page,
         params string[] arguments)
     {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(page is null ? 120 : 30));
+        var token = timeout.Token;
         var startInfo = new ProcessStartInfo("git")
         {
             WorkingDirectory = repositoryPath,
@@ -246,12 +238,24 @@ public sealed class GitService
             CreateNoWindow = true
         };
         startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        if (page is not null)
+        {
+            foreach (var key in startInfo.Environment.Keys.Where(key => key.StartsWith("GIT_", StringComparison.Ordinal)).ToArray())
+                startInfo.Environment.Remove(key);
+            startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+            startInfo.Environment["GIT_NO_LAZY_FETCH"] = "1";
+            startInfo.Environment["GIT_NO_REPLACE_OBJECTS"] = "1";
+            startInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+            foreach (var argument in new[] { "--no-pager", "--literal-pathspecs", "-c", "protocol.allow=never", "-c", "core.hooksPath=/dev/null" })
+                startInfo.ArgumentList.Add(argument);
+        }
         if (settings is not null)
             ApplyAuthentication(startInfo, settings);
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
         using var process = new Process { StartInfo = startInfo };
+        token.ThrowIfCancellationRequested();
         try
         {
             if (!process.Start())
@@ -267,15 +271,51 @@ public sealed class GitService
 
         try
         {
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            return new GitResult(process.ExitCode, await outputTask, await errorTask);
+            var more = false;
+            async Task<string> ReadBoundedAsync(StreamReader reader, int skip, int limit, bool paging)
+            {
+                try
+                {
+                    var text = new System.Text.StringBuilder();
+                    var buffer = new char[4096];
+                    while (true)
+                    {
+                        var count = await reader.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length,
+                            skip > 0 ? skip : limit - text.Length + 1)), token);
+                        if (count == 0)
+                        {
+                            if (skip > 0) throw new GitException("Git output ended before the requested offset; review is incomplete.");
+                            return text.ToString();
+                        }
+                        if (skip > 0) { skip -= count; continue; }
+                        var accepted = Math.Min(count, limit - text.Length);
+                        text.Append(buffer, 0, accepted);
+                        if (accepted == count) continue;
+                        if (!paging) throw new GitException("Git output limit exceeded; review is incomplete.");
+                        more = true;
+                        // Keep a Unicode scalar intact across character-offset pages.
+                        if (text.Length > 0 && char.IsHighSurrogate(text[text.Length - 1])) text.Length--;
+                        if (!process.HasExited) process.Kill(true);
+                        return text.ToString();
+                    }
+                }
+                catch
+                {
+                    if (!process.HasExited) process.Kill(true);
+                    throw;
+                }
+            }
+            var outputTask = ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
+            var errorTask = ReadBoundedAsync(process.StandardError, 0, 16_000, false);
+            await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync(token));
+            return new GitResult(more ? 0 : process.ExitCode, await outputTask, await errorTask, more);
         }
         catch (OperationCanceledException)
         {
             if (!process.HasExited)
                 process.Kill(true);
+            if (!cancellationToken.IsCancellationRequested)
+                throw new GitException("Git process timed out; review is incomplete.");
             throw;
         }
     }
@@ -459,7 +499,7 @@ public sealed class GitService
     }
 }
 
-public sealed record GitResult(int ExitCode, string Output, string Error);
+public sealed record GitResult(int ExitCode, string Output, string Error, bool HasMore = false);
 
 public sealed class GitException : Exception
 {

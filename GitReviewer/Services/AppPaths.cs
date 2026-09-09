@@ -22,7 +22,7 @@ public static class AppPaths
 
         WriteIfMissing(ReadTemplate("models.example.conf"), ModelsConfig);
         WriteIfMissing(ReadTemplate("system-prompt.example.txt"), SystemPrompt);
-        MigrateOriginalDefaultPrompt();
+        MigrateLegacyDefaultPrompts();
     }
 
     public static string ReadTemplate(string fileName)
@@ -40,7 +40,7 @@ public static class AppPaths
             File.WriteAllText(destination, content, Encoding.UTF8);
     }
 
-    private static void MigrateOriginalDefaultPrompt()
+    private static void MigrateLegacyDefaultPrompts()
     {
         const string originalDefault = """
             Ты проверяешь один Git-коммит.
@@ -58,7 +58,34 @@ public static class AppPaths
         if (!File.Exists(SystemPrompt))
             return;
         var current = File.ReadAllText(SystemPrompt).Replace("\r\n", "\n").Trim();
-        if (current.Equals(originalDefault.Replace("\r\n", "\n").Trim(), StringComparison.Ordinal))
+        const string previousEnglish = """
+            You review one Git commit at a time.
+
+            Find correctness bugs introduced by the presented change. Consider added,
+            modified, and deleted lines. Look for incorrect calculations, removed
+            validation, wrong conditions, null-handling errors, exceptions, and unintended
+            behavior changes.
+
+            Do not audit the old version of the project. Context lines are provided only to
+            help you understand the diff. It is better to report a plausible bug than to
+            miss a dangerous change.
+            """;
+        const string previousRussian = """
+            Ты проверяешь один Git-коммит.
+
+            Ищи ошибки корректности, внесенные представленным изменением. Учитывай
+            добавленные, измененные и удаленные строки. Проверяй неправильные вычисления,
+            потерю проверок, неверные условия, ошибки обработки null, исключения и
+            нежелательное изменение поведения.
+
+            Не проводи аудит старой версии проекта. Контекстные строки даны только для
+            понимания diff. Лучше сообщить о вероятной ошибке, чем пропустить опасное
+            изменение.
+            """;
+        if (current.Equals(previousRussian.Replace("\r\n", "\n").Trim(), StringComparison.Ordinal))
+            File.WriteAllText(SystemPrompt, ReadTemplate("system-prompt.ru.example.txt"), Encoding.UTF8);
+        else if (current.Equals(originalDefault.Replace("\r\n", "\n").Trim(), StringComparison.Ordinal) ||
+                 current.Equals(previousEnglish.Replace("\r\n", "\n").Trim(), StringComparison.Ordinal))
             File.WriteAllText(SystemPrompt, ReadTemplate("system-prompt.example.txt"), Encoding.UTF8);
     }
 }

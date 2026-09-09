@@ -967,8 +967,8 @@ public partial class MainWindow : Window
     {
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
-        var chunk = progress.TotalChunks > 0 ? $" | {progress.Chunk}/{progress.TotalChunks}" : string.Empty;
-        _progressLines.Enqueue($"{DateTime.Now:HH:mm:ss} | {model} | {commit} | {progress.Stage}{chunk}");
+        var detail = new string(progress.Detail.Where(c => !char.IsControl(c)).Take(200).ToArray());
+        _progressLines.Enqueue($"{DateTime.Now:HH:mm:ss} | {model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}");
         while (_progressLines.Count > 500) _progressLines.Dequeue();
         _logWindow?.SetLines(_progressLines);
     }

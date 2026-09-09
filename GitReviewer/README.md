@@ -1,5 +1,8 @@
 # Git Reviewer
 
+Version **2.0.0** introduces native model-driven Git tools and requires a
+tool-capable model/provider. There is no legacy diff-prompt fallback.
+
 Git Reviewer is a Windows desktop application that uses a local or cloud
 OpenAI-compatible model to inspect Git commits for correctness bugs.
 
@@ -9,9 +12,9 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
 - Supports local-only repositories with automatic fetch disabled.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
-- Reviews added, modified, and deleted lines from each commit diff.
+- Lets the model independently explore an immutable commit using read-only Git tools.
 - Allows manual review of any commit by its short or full SHA.
-- Supports multiple model profiles for OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
+- Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an editable system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
 - Continues monitoring in the Windows system tray after the main window is closed.
@@ -42,7 +45,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-1.3.0-win-x64.exe
+dist\GitReviewer-2.0.0-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -141,7 +144,8 @@ passphrase or an HTTPS token itself.
 ## Review Behavior
 
 On the first connection, only the selected branch tip is reviewed against its first
-parent. Earlier commits are not sent to the model. After that, the last
+parent. Earlier commits are not automatically sent to the model; the model may
+request ancestor history as context. After that, the last
 successfully reviewed SHA is stored in `state.json`, and only newer commits are
 processed.
 
@@ -149,21 +153,105 @@ Manual review accepts a short or full hexadecimal commit SHA. It writes a
 separate report entry and does not change the automatic monitoring position in
 `state.json`. Stop automatic monitoring before starting a manual review.
 
+### Native Git Agent
+
+`ReviewRunner` validates the repository, fixes the reviewed full SHA, checks for
+an empty change, and starts one `ModelClient` agent session. It does not capture
+or supply a raw diff. The old `DiffChunker` flow has been removed. Chat requests
+use OpenAI `tools`, `tool_choice: "auto"`, assistant `tool_calls`, and correlated
+`role: "tool"` results across multiple turns. Multiple returned calls are executed
+sequentially, even though parallel tool calls are disabled in requests.
+
+| Tool | Scope |
+| --- | --- |
+| `git_metadata` | Commit metadata and parents for the target or a discovered full SHA |
+| `git_history` | Up to 20 ancestors and parents per call, starting from an allowed SHA |
+| `git_changed_files` | Paginated names/status against the target's first parent |
+| `git_diff` | Paginated full target patch, root commits compared with the empty tree |
+| `git_file` | Paginated committed blob at an exact relative path and allowed SHA |
+
+Refs such as `HEAD`, arbitrary revision expressions, paths outside the Git tree,
+and user-supplied Git flags are not accepted by tools. Only the target, its parents,
+and full SHAs discovered through bounded history/metadata are allowed (at most
+1024 remembered SHAs). As with manual SHA input, repositories currently use
+40-character SHA-1 object IDs; SHA-256 repositories are not supported.
+Changing the selected branch or dirty checkout cannot
+change the session's target. Renames are shown as deletion/addition, and merge
+commits are reviewed against their first parent, not a combined merge diff.
+Parent discovery reads raw commit headers, so a shallow boundary is not mistaken
+for a root commit. A missing comparison parent fails locally without lazy fetching;
+obtain the required history outside the model tools before retrying.
+
+Git runs through `ProcessStartInfo.ArgumentList`, never a shell. Tools cannot
+write, fetch, push, checkout, reset, run hooks, external diff, textconv, or network
+protocols. Lazy fetching and replacement objects are disabled. File content comes
+from `cat-file blob`, not the working directory; a symlink returns its stored link
+text, never the target. Submodules are not traversed. Installed Git and local
+repository administration remain trusted; this is not an OS sandbox against a
+concurrent local attacker replacing repository metadata or the Git executable.
+
+Every page is capped at 16,000 UTF-16 characters, with `offset` and `next_offset`
+(`null` at EOF). Every paged resource must start at offset zero, then use exactly
+its expected next offset; skipping unread content or seeking past EOF is rejected.
+Output limits are enforced while draining the subprocess, including very long
+lines, rather than truncating an unbounded captured string.
+
+On the model's first request for `git_diff` or `git_changed_files`, that command's
+complete rendered output is captured once in a bounded in-memory snapshot. The
+two snapshots share a 512,000-character storage cap; oversized or failed captures
+abort the review instead of exposing a partial snapshot. Later pages use only the
+snapshot, so changes to live attributes or rendering configuration cannot alter
+or shorten the remaining pages. Rendering reflects local attributes/configuration
+at capture time, not necessarily the attributes committed at the target SHA.
+No diff is captured or supplied automatically by the runner. Committed blob pages
+rerun the read-only object read, with offsets limited to 2,000,000 characters.
+The model must consume the entire diff in order and finish every opened paged
+resource before a final report can be accepted. Binary diff markers are visible,
+but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
+with replacement for invalid bytes, not a binary download API.
+
+Budgets per review: 32 model rounds, 64 tool calls, 512,000 serialized tool-result
+characters, 128,000 characters per HTTP response, and a 10-minute overall agent
+deadline. Each tool subprocess has a 30-second timeout and bounded stderr.
+Custom prompts are capped at 32,000 characters. Cancellation kills Git process
+trees and cancels HTTP work. Invalid arguments and unknown tools produce safe
+error results for correction within the same budgets. Once arguments are valid,
+a Git retrieval failure (including a nonexistent path or unavailable blob) is
+fatal: reading an unrelated resource cannot clear a missing-context failure.
+Malformed response
+envelopes, unrecovered errors, output/budget exhaustion, unfinished pages,
+non-`stop` final responses, or incomplete report blocks fail the review. No report,
+cursor advancement, or completion notification is produced for those failures.
+Large commits may therefore require a different workflow instead of being
+silently reviewed only in part. Limits are fixed, not inferred from model metadata.
+
+Empty changes are detected locally and reported honestly as not sent to the model.
+Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.
+Protocol/safety instructions are always added by the client regardless of the
+editable prompt. A single initial system message combines the custom prompt,
+then the mandatory overriding protocol and language instruction, for compatibility
+with tool-capable Mistral/vLLM chat templates. Git content and branch context are explicitly untrusted data,
+not commands or instructions. This reduces prompt-injection risk but cannot
+guarantee that a model's findings are accurate.
+
 ## Journal And Log
 
 The former Log tab is now **Journal** (**Журнал**) and retains general messages.
 The main window's **Log** (**Лог**) button opens a separate window containing the
-latest 500 lifecycle entries: model and commit, diff preparation, chunk N/M,
+latest 500 lifecycle entries: model and commit, repository preparation,
 request, waiting, response received, parsing, report writing, cursor saving,
 completion, failure, or cancellation. Stage identifiers are language-independent.
+Agent lifecycle and actual tool names with started/succeeded/rejected/failed/canceled
+status are included; unsupported names are replaced with a fixed safe label.
 This is not token streaming or internal model reasoning. No prompts, diffs,
 response bodies, API keys, or authentication details are included in this window.
 Closing it does not interrupt review; reopening restores the bounded history.
 Hiding the main window also hides Log, and exiting the app closes it.
 
 After the report is written (and the automatic cursor saved), the app requests
-one tray balloon per completed commit, including `NO_BUGS`. Unstructured replies
-are explicitly marked as requiring report inspection; empty diffs are marked as
+one tray balloon per completed commit, including `NO_BUGS`. Historical unstructured
+reports remain readable, but new incomplete/unstructured agent replies fail rather
+than advancing the cursor. Empty diffs are marked as
 not sent to the model, rather than claiming no bugs. Failed or canceled reviews
 do not generate completion notifications. Notification failures do not affect
 review state. Windows notification settings may suppress or coalesce balloons.
@@ -202,7 +290,17 @@ When both are configured, `api_key_environment` takes precedence over
 
 Model endpoints may use HTTP or HTTPS. HTTP is useful for local networks and
 self-hosted model servers, but it does not encrypt the API key or repository
-diff. The GUI displays a warning for non-loopback HTTP endpoints.
+content requested through tools. The GUI displays a warning for non-loopback HTTP endpoints.
+
+Review requires native OpenAI-compatible function calling, not merely chat text
+or JSON mode. The chosen model, chat template, and server must support `tools`,
+`tool_choice: "auto"`, `tool_calls`, tool result messages and `finish_reason`.
+For vLLM, configure `--enable-auto-tool-choice` and `--tool-call-parser` with the
+parser appropriate to the served model; consult that model's vLLM instructions.
+Ollama/LM Studio support likewise depends on the model and server version.
+Provider rejections include actionable compatibility guidance and never silently
+fall back to the old flow. **Test connection** remains a simple chat check: success
+does not verify tool calling or adequate context capacity for a review.
 
 ### vLLM And Model Discovery
 
@@ -233,7 +331,7 @@ No server address or model ID is assumed.
 
 If vLLM reports `max_model_len`, the selected model's context limit is displayed
 as information only. It is not saved, sent in chat requests, or used to change
-diff chunking or output limits. Missing metadata does not prevent model selection.
+agent paging or output limits. Missing metadata does not prevent model selection.
 Editing connection details or switching profiles clears discovered metadata;
 responses from requests started before form edits or newer operations are ignored.
 
@@ -246,15 +344,21 @@ server or credentials are required:
 
 ```sh
 dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
+dotnet run --project ../GitReviewer.Tests/PromptMigration/PromptMigration.csproj
 ```
 
 Run this command from `GitReviewer`. Tests cover case-sensitive refs, custom
 remote mappings, dirty checkout preservation, cursor migration, manual and
-automatic completion, chunk progress, failures, and cancellation. Plink checks
+automatic completion, native multi-turn/multi-call tool flow, paged output,
+unknown tools, malformed arguments/responses, incomplete finals, budgets,
+failures, and cancellation. Real Git fixtures check immutable SHA reads, root
+commits, dirty files, unsafe paths, binary changes and symlink blobs. Plink checks
 cover path persistence, shell-safe custom paths, blank-path detection, missing
 paths, and background fetch. In-flight manual and automatic model requests are
 also checked for clean cancellation without completion notifications. This local
 test project is ignored and is not included in the production distribution.
+The second command checks production prompt seeding, exact legacy EN/RU migration,
+and preservation of customized prompts in an isolated local data directory.
 The WPF project can be built on Linux with `dotnet build`, but running and
 interactively checking the GUI and tray notifications requires Windows.
 
@@ -287,3 +391,8 @@ model instructions.
 If the system prompt still matches one of the default templates, switching the
 language switches the prompt automatically. A customized prompt is never
 overwritten by language switching.
+
+On upgrade, exact shipped pre-2.0 English/Russian default prompts are migrated to
+the new tool-aware defaults. Customized persisted prompts are preserved. The
+client's mandatory protocol explains that older references to a supplied diff
+now mean the diff retrieved through tools; users can restore defaults explicitly.
