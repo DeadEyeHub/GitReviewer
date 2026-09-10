@@ -166,40 +166,42 @@ public sealed class ModelClient
                     messages.Add(assistantMessage);
                     foreach (var call in toolCalls.EnumerateArray())
                     {
-                        calls++;
+                        var callNumber = ++calls;
+                        var callId = call.GetProperty("id").GetString()!;
                         var function = call.GetProperty("function");
                         var name = function.GetProperty("name").GetString() ?? "";
                         var safeName = GitToolSession.Names.Contains(name) ? name : "unsupported_tool";
                         var arguments = function.GetProperty("arguments").GetString() ?? "";
-                        log?.Invoke($"Git tool {calls}: {safeName} arguments: {arguments}");
+                        log?.Invoke($"Git tool {callNumber}: {safeName} arguments: {arguments}");
                         string result;
                         try
                         {
-                            result = await tools.ExecuteAsync(name, arguments, cancellationToken);
+                            result = await tools.ExecuteAsync(name, arguments, cancellationToken, trace =>
+                                log?.Invoke($"Git command for tool {callNumber} ({callId}): {JsonSerializer.Serialize(trace)}"));
                             unresolvedErrors.Remove(safeName);
                             unresolvedErrors.Remove("unsupported_tool");
-                            log?.Invoke($"Git tool {calls}: {safeName} succeeded");
+                            log?.Invoke($"Git tool {callNumber}: {safeName} succeeded");
                         }
                         catch (Exception exception) when (exception is ArgumentException or JsonException or InvalidOperationException or FormatException or OverflowException)
                         {
                             unresolvedErrors.Add(safeName);
                             result = "{\"status\":\"error\",\"message\":\"Invalid arguments or unsupported tool. Use the advertised schema, allowed SHAs, exact paths and expected offsets; retry within budget.\"}";
-                            log?.Invoke($"Git tool {calls}: {safeName} rejected");
+                            log?.Invoke($"Git tool {callNumber}: {safeName} rejected");
                         }
                         catch (OperationCanceledException)
                         {
-                            log?.Invoke($"Git tool {calls}: {safeName} canceled");
+                            log?.Invoke($"Git tool {callNumber}: {safeName} canceled");
                             throw;
                         }
                         catch
                         {
-                            log?.Invoke($"Git tool {calls}: {safeName} failed");
+                            log?.Invoke($"Git tool {callNumber}: {safeName} failed");
                             throw;
                         }
                         output += result.Length;
-                        log?.Invoke($"Tool result {call.GetProperty("id").GetString()}: {result}");
+                        log?.Invoke($"Tool result {callId}: {result}");
                         if (output > 512_000) throw new InvalidDataException("Git tool output budget exhausted; review incomplete.");
-                        messages.Add(new { role = "tool", tool_call_id = call.GetProperty("id").GetString(), content = result });
+                        messages.Add(new { role = "tool", tool_call_id = callId, content = result });
                     }
                     continue;
                 }

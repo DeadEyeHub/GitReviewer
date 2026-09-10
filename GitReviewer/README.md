@@ -20,6 +20,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Continues monitoring in the Windows system tray after the main window is closed.
 - Writes findings to a Markdown report with commit, file, and line information.
 - Provides a separate lifecycle **Log** window and a **Journal** (**Журнал**) tab.
+- Records each model-driven Git command with its arguments, exit codes, captured output, and errors in the detailed log.
 - Requests a tray notification for each completed manual or automatic commit review, including no findings.
 
 ## Requirements

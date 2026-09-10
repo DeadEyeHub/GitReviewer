@@ -206,24 +206,29 @@ public sealed class GitService
         string repositoryPath,
         CancellationToken cancellationToken,
         params string[] arguments)
-        => await RunCoreAsync(repositoryPath, null, cancellationToken, null, arguments);
+        => await RunCoreAsync(repositoryPath, null, cancellationToken, null, null, arguments);
 
     private static async Task<GitResult> RunWithAuthenticationAsync(
         string repositoryPath,
         AppSettings settings,
         CancellationToken cancellationToken,
         params string[] arguments)
-        => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, arguments);
+        => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, null, arguments);
 
     internal static Task<GitResult> ReadPageAsync(string repositoryPath, int offset, int limit,
         CancellationToken token, params string[] arguments) =>
-        RunCoreAsync(repositoryPath, null, token, (offset, limit), arguments);
+        RunCoreAsync(repositoryPath, null, token, (offset, limit), null, arguments);
+
+    internal static Task<GitResult> ReadPageAsync(string repositoryPath, int offset, int limit,
+        CancellationToken token, Action<GitCommandTrace> trace, params string[] arguments) =>
+        RunCoreAsync(repositoryPath, null, token, (offset, limit), trace, arguments);
 
     private static async Task<GitResult> RunCoreAsync(
         string repositoryPath,
         AppSettings? settings,
         CancellationToken cancellationToken,
         (int Offset, int Limit)? page,
+        Action<GitCommandTrace>? trace,
         params string[] arguments)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -254,16 +259,43 @@ public sealed class GitService
         foreach (var argument in arguments)
             startInfo.ArgumentList.Add(argument);
 
+        void PublishTrace(string stage, int? processExitCode = null, GitResult? result = null, string? failure = null)
+        {
+            if (trace is null) return;
+            try
+            {
+                trace(new GitCommandTrace(
+                    stage,
+                    startInfo.FileName,
+                    startInfo.WorkingDirectory,
+                    startInfo.ArgumentList.ToArray(),
+                    page?.Offset,
+                    page?.Limit,
+                    processExitCode,
+                    result,
+                    failure));
+            }
+            catch
+            {
+                // Diagnostics must not affect the review operation.
+            }
+        }
+
         using var process = new Process { StartInfo = startInfo };
         token.ThrowIfCancellationRequested();
+        PublishTrace("started");
         try
         {
             if (!process.Start())
+            {
+                PublishTrace("start_failed", failure: "Could not start Git.");
                 throw new GitException(Localization.Text(
                     "Could not start Git.", "Не удалось запустить Git."));
+            }
         }
         catch (Exception exception) when (exception is not GitException)
         {
+            PublishTrace("start_failed", failure: exception.Message);
             throw new GitException(Localization.Text(
                 "Git was not found or could not be started.",
                 "Git не найден или не может быть запущен."), exception);
@@ -308,16 +340,33 @@ public sealed class GitService
             var outputTask = ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
             var errorTask = ReadBoundedAsync(process.StandardError, 0, 16_000, false);
             await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync(token));
-            return new GitResult(more ? 0 : process.ExitCode, await outputTask, await errorTask, more);
+            var result = new GitResult(more ? 0 : process.ExitCode, await outputTask, await errorTask, more);
+            PublishTrace("completed", process.ExitCode, result);
+            return result;
         }
         catch (OperationCanceledException)
         {
             if (!process.HasExited)
                 process.Kill(true);
             if (!cancellationToken.IsCancellationRequested)
+            {
+                PublishTrace("timed_out", TryGetExitCode(process), failure: "Git process timed out; review is incomplete.");
                 throw new GitException("Git process timed out; review is incomplete.");
+            }
+            PublishTrace("canceled", TryGetExitCode(process), failure: "Git command was canceled.");
             throw;
         }
+        catch (Exception exception)
+        {
+            PublishTrace("failed", TryGetExitCode(process), failure: exception.Message);
+            throw;
+        }
+    }
+
+    private static int? TryGetExitCode(Process process)
+    {
+        try { return process.HasExited ? process.ExitCode : null; }
+        catch (InvalidOperationException) { return null; }
     }
 
     private static void ApplyAuthentication(ProcessStartInfo startInfo, AppSettings settings)
@@ -500,6 +549,17 @@ public sealed class GitService
 }
 
 public sealed record GitResult(int ExitCode, string Output, string Error, bool HasMore = false);
+
+internal sealed record GitCommandTrace(
+    string Stage,
+    string Executable,
+    string WorkingDirectory,
+    string[] Arguments,
+    int? Offset,
+    int? Limit,
+    int? ProcessExitCode,
+    GitResult? Result,
+    string? Failure);
 
 public sealed class GitException : Exception
 {

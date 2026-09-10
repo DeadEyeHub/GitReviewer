@@ -94,7 +94,14 @@ public sealed class GitToolSession
         }
     }).ToArray();
 
-    public async Task<string> ExecuteAsync(string name, string arguments, CancellationToken token)
+    public Task<string> ExecuteAsync(string name, string arguments, CancellationToken token) =>
+        ExecuteAsync(name, arguments, token, null);
+
+    internal async Task<string> ExecuteAsync(
+        string name,
+        string arguments,
+        CancellationToken token,
+        Action<GitCommandTrace>? trace)
     {
         token.ThrowIfCancellationRequested();
         if (!Names.Contains(name)) throw new ArgumentException("Unsupported tool. Use an advertised Git tool.");
@@ -138,7 +145,7 @@ public sealed class GitToolSession
             {
                 // Render once: live attributes/config must not alter or shorten later pages.
                 var captured = await GitService.ReadPageAsync(_repository, 0,
-                    SnapshotLimit - _snapshots.Values.Sum(value => value.Length), token, command);
+                    SnapshotLimit - _snapshots.Values.Sum(value => value.Length), token, trace, command);
                 if (captured.ExitCode != 0 || captured.HasMore)
                     throw new GitException("Git snapshot unavailable or exceeds the 512000-character session limit; review is incomplete.");
                 snapshot = captured.Output;
@@ -150,7 +157,7 @@ public sealed class GitToolSession
             result = new GitResult(0, snapshot.Substring(offset, length), "", offset + length < snapshot.Length);
         }
         else
-            result = await GitService.ReadPageAsync(_repository, offset, PageSize, token, command);
+            result = await GitService.ReadPageAsync(_repository, offset, PageSize, token, trace, command);
         if (result.ExitCode != 0) throw new GitException("Git could not read that local object/path; review is incomplete. No network fetch is permitted.");
         if (result.HasMore && name is "git_metadata" or "git_history")
             throw new GitException("Metadata output limit exceeded; review is incomplete.");
