@@ -194,9 +194,9 @@ public sealed class ReviewRunner
     {
         var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
         await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
+        repositoryPath = await _git.GetRepositoryRootAsync(repositoryPath, cancellationToken);
         var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
-        var stateKey = $"{repositoryPath}|{branch}";
-        var state = await _stateStore.LoadAsync(cancellationToken);
+        var previousCommit = await _stateStore.GetCursorAsync(repositoryPath, branch, cancellationToken);
 
         if (settings.PullEnabled)
         {
@@ -223,14 +223,14 @@ public sealed class ReviewRunner
             Log?.Invoke(Localization.Text("Git fetch completed.", "Git fetch выполнен."));
         }
 
-        if (!state.LastReviewedCommits.TryGetValue(stateKey, out var previousCommit))
+        if (previousCommit is null)
         {
             var initialHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
             Log?.Invoke(Localization.Format(
                 "First connection: reviewing current commit {0}.",
                 "Первое подключение: проверяется текущий коммит {0}.",
                 Short(initialHead)));
-            await ProcessCommitAsync(repositoryPath, branch, stateKey, initialHead, state, profile, cancellationToken);
+            await ProcessCommitAsync(repositoryPath, branch, initialHead, profile, cancellationToken);
             previousCommit = initialHead;
         }
 
@@ -245,22 +245,19 @@ public sealed class ReviewRunner
 
         var commits = await _git.GetCommitsAfterAsync(repositoryPath, previousCommit, head, cancellationToken);
         foreach (var sha in commits)
-            await ProcessCommitAsync(repositoryPath, branch, stateKey, sha, state, profile, cancellationToken);
+            await ProcessCommitAsync(repositoryPath, branch, sha, profile, cancellationToken);
     }
 
     private async Task ProcessCommitAsync(
         string repositoryPath,
         string branch,
-        string stateKey,
         string sha,
-        RepositoryState state,
         ModelProfile profile,
         CancellationToken cancellationToken)
     {
         var result = await AnalyzeAndReportAsync(repositoryPath, branch, sha, profile, false, cancellationToken);
-        state.LastReviewedCommits[stateKey] = sha;
         Emit(ReviewStage.SavingCursor, profile, sha);
-        await _stateStore.SaveAsync(state, cancellationToken);
+        await _stateStore.SetCursorAsync(repositoryPath, branch, sha, cancellationToken);
         Complete(repositoryPath, branch, sha, profile, result, false, cancellationToken);
         Log?.Invoke(Localization.Format(
             "Commit {0} reviewed, findings: {1}.",

@@ -6,6 +6,17 @@ namespace GitReviewer.Services;
 
 public sealed class GitService
 {
+    public async Task<string> GetRepositoryRootAsync(string repositoryPath, CancellationToken cancellationToken)
+    {
+        var root = await RunRequiredAsync(repositoryPath, cancellationToken, "rev-parse", "--show-toplevel");
+        root = root.TrimEnd('\r', '\n');
+        if (root.Length == 0 || root.Any(char.IsControl))
+            throw new GitException(Localization.Text(
+                "Git returned an invalid repository root.",
+                "Git вернул недопустимый корень репозитория."));
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+    }
+
     public async Task ValidateRepositoryAsync(string repositoryPath, CancellationToken cancellationToken)
     {
         if (!Directory.Exists(repositoryPath))

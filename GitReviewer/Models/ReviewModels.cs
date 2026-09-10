@@ -21,8 +21,14 @@ public sealed class ReviewResult
 
 public sealed class RepositoryState
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+    public Dictionary<string, RepositoryReviewState> Repositories { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class RepositoryReviewState
+{
     public Dictionary<string, string> LastReviewedCommits { get; set; } =
         new(StringComparer.Ordinal);
 }

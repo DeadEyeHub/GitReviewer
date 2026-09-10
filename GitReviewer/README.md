@@ -8,6 +8,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 
 ## Features
 
+- Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
 - Reviews the selected local or remote-tracking branch tip on first connection, without scanning older commits.
 - Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
 - Supports local-only repositories with automatic fetch disabled.

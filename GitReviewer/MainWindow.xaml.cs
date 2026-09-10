@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly GitService _git = new();
     private readonly ModelClient _model = new();
     private readonly ReportWriter _reportWriter = new();
+    private readonly StateStore _stateStore = new();
     private readonly ReviewRunner _runner;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly Forms.ToolStripMenuItem _trayOpenItem;
@@ -40,6 +41,8 @@ public partial class MainWindow : Window
     private string _selectedBranch = string.Empty;
     private bool _loadingRepository = true;
     private bool _repositoryReady;
+    private string _repositoryPath = string.Empty;
+    private bool _repositoryWasKnown;
     private int _repositoryVersion;
     private readonly PersistentLog _journal = new(AppPaths.JournalLog);
     private readonly PersistentLog _details = new(
@@ -52,7 +55,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _runner = new ReviewRunner(
-            _git, _model, _configuration, new StateStore(), _reportWriter);
+            _git, _model, _configuration, _stateStore, _reportWriter);
         _runner.Log += AppendLog;
         _runner.ModelLog += _details.Append;
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
@@ -518,6 +521,8 @@ public partial class MainWindow : Window
         var version = ++_repositoryVersion;
         var selected = _selectedBranch;
         _repositoryReady = false;
+        _repositoryPath = string.Empty;
+        _repositoryWasKnown = false;
         _loadingRepository = true;
         BranchComboBox.ItemsSource = selected.Length == 0 ? Array.Empty<string>() : new[] { selected };
         BranchComboBox.SelectedItem = selected;
@@ -528,6 +533,7 @@ public partial class MainWindow : Window
         {
             var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
             await _git.ValidateRepositoryAsync(path, CancellationToken.None);
+            path = await _git.GetRepositoryRootAsync(path, CancellationToken.None);
             var branches = await _git.GetBranchesAsync(path, CancellationToken.None);
             if (version != _repositoryVersion || _exitRequested) return;
             // Keep a missing selection visible, but allow choosing another existing ref.
@@ -549,7 +555,11 @@ public partial class MainWindow : Window
             var remote = await _git.GetSelectedRemoteSummaryAsync(path, branch, CancellationToken.None);
             var detectedMode = _authenticationNeedsDetection
                 ? await _git.DetectAuthenticationModeAsync(path, CancellationToken.None, branch) : null;
+            var wasKnown = await _stateStore.RegisterRepositoryAsync(path, CancellationToken.None);
             if (version != _repositoryVersion || _exitRequested) return;
+            _loadingRepository = true;
+            RepositoryPathTextBox.Text = path;
+            _loadingRepository = false;
             RemoteTextBlock.Text = remote.Length == 0
                 ? Localization.Text("Not configured", "Не настроен")
                 : remote;
@@ -557,6 +567,8 @@ public partial class MainWindow : Window
             {
                 LoadAuthenticationOptions(detectedMode);
             }
+            _repositoryPath = path;
+            _repositoryWasKnown = wasKnown;
             _repositoryReady = true;
         }
         catch (Exception exception)
@@ -817,7 +829,7 @@ public partial class MainWindow : Window
             throw new InvalidOperationException(Localization.Text(
                 "Wait for repository refresh and select an existing branch.",
                 "Дождитесь обновления репозитория и выберите существующую ветку."));
-        var path = RepositoryPathTextBox.Text.Trim();
+        var path = _repositoryPath;
         if (path.Length == 0)
             throw new InvalidOperationException(Localization.Text(
                 "Select a Git repository folder.",
@@ -828,7 +840,7 @@ public partial class MainWindow : Window
                 "Интервал должен быть от 5 до 86400 секунд."));
         return new AppSettings
         {
-            RepositoryPath = Path.GetFullPath(path),
+            RepositoryPath = path,
             BranchRef = _selectedBranch,
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
