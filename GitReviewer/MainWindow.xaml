@@ -95,7 +95,7 @@
                               SelectionChanged="LanguageComboBox_SelectionChanged" />
 
                     <TextBlock x:Name="SelectedCommitLabel" Grid.Row="10" Grid.Column="0" Margin="0,7,12,12"
-                               Text="Review selected commit" />
+                               Text="Selected commit SHA" />
                     <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Top">
                         <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
                                  VerticalContentAlignment="Center" ToolTip="Enter a short or full commit SHA" />
@@ -204,7 +204,11 @@
                 </Grid.RowDefinitions>
                 <StackPanel Grid.Row="0">
                     <TextBlock><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
-                    <TextBlock Margin="0,4,0,0"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
+                    <DockPanel Margin="0,4,0,0">
+                        <Button x:Name="SetStartCommitButton" DockPanel.Dock="Right" Margin="12,0,0,0" Padding="12,4"
+                                Content="Start from selected commit" IsEnabled="False" Click="SetStartCommit_Click" />
+                        <TextBlock VerticalAlignment="Center"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
+                    </DockPanel>
                 </StackPanel>
                 <WrapPanel Grid.Row="1" Margin="0,10,0,0" HorizontalAlignment="Right">
                     <Button x:Name="OpenLogButton" Padding="12,7" Margin="0,0,8,0" Content="Log" Click="OpenLog_Click" />

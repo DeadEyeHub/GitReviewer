@@ -43,6 +43,9 @@ public partial class MainWindow : Window
     private bool _repositoryReady;
     private string _repositoryPath = string.Empty;
     private bool _repositoryWasKnown;
+    private readonly HashSet<string> _repositoriesAwaitingTest = new(StringComparer.OrdinalIgnoreCase);
+    private string _testedRepositoryIdentity = string.Empty;
+    private bool _settingStartCommit;
     private int _repositoryVersion;
     private readonly PersistentLog _journal = new(AppPaths.JournalLog);
     private readonly PersistentLog _details = new(
@@ -189,11 +192,17 @@ public partial class MainWindow : Window
             "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Отключите для локального репозитория.");
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
-        SelectedCommitLabel.Text = Localization.Text("Review selected commit", "Проверить выбранный коммит");
+        SelectedCommitLabel.Text = Localization.Text("Selected commit SHA", "SHA выбранного коммита");
         CommitShaTextBox.ToolTip = Localization.Text(
             "Enter a short or full commit SHA",
             "Введите короткий или полный SHA коммита");
         ReviewCommitButton.Content = Localization.Text("Review commit", "Проверить коммит");
+        SetStartCommitButton.Content = Localization.Text(
+            "Start from selected commit",
+            "Начать с выбранного коммита");
+        SetStartCommitButton.ToolTip = Localization.Text(
+            "Use the SHA entered above as the first commit of the next automatic review.",
+            "Использовать введенный выше SHA как первый коммит следующей автоматической проверки.");
         AuthenticationLabel.Text = Localization.Text("Authentication", "Аутентификация");
         SshKeyLabel.Text = Localization.Text("SSH private key", "Приватный SSH-ключ");
         BrowseSshKeyButton.Content = Localization.Text("Browse...", "Обзор...");
@@ -272,6 +281,7 @@ public partial class MainWindow : Window
             _authenticationNeedsDetection = false;
             UpdateAuthenticationControls();
             SaveAuthenticationPreferences();
+            UpdateStartCommitButton();
         }
     }
 
@@ -429,8 +439,11 @@ public partial class MainWindow : Window
 
     private void SshKeyPathTextBox_LostKeyboardFocus(
         object sender,
-        System.Windows.Input.KeyboardFocusChangedEventArgs e) =>
+        System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
         SaveAuthenticationPreferences();
+        UpdateStartCommitButton();
+    }
 
     private void SaveAuthenticationPreferences()
     {
@@ -453,10 +466,12 @@ public partial class MainWindow : Window
         try
         {
             var settings = ReadSettingsFromForm();
+            var identity = GetRepositoryTestIdentity();
             _configuration.SaveSettings(settings);
             await _git.TestRemoteAccessAsync(
                 settings.RepositoryPath, settings, CancellationToken.None);
-            if (version != _repositoryVersion || _exitRequested) return;
+            if (version != _repositoryVersion || _exitRequested || identity != GetRepositoryTestIdentity()) return;
+            _testedRepositoryIdentity = identity;
             RemoteAccessStatusTextBlock.Text = Localization.Text(
                 "Repository access confirmed.",
                 "Доступ к репозиторию подтвержден.");
@@ -472,6 +487,7 @@ public partial class MainWindow : Window
         finally
         {
             TestRemoteButton.IsEnabled = true;
+            UpdateStartCommitButton();
         }
     }
 
@@ -523,6 +539,7 @@ public partial class MainWindow : Window
         _repositoryReady = false;
         _repositoryPath = string.Empty;
         _repositoryWasKnown = false;
+        UpdateStartCommitButton();
         _loadingRepository = true;
         BranchComboBox.ItemsSource = selected.Length == 0 ? Array.Empty<string>() : new[] { selected };
         BranchComboBox.SelectedItem = selected;
@@ -556,6 +573,7 @@ public partial class MainWindow : Window
             var detectedMode = _authenticationNeedsDetection
                 ? await _git.DetectAuthenticationModeAsync(path, CancellationToken.None, branch) : null;
             var wasKnown = await _stateStore.RegisterRepositoryAsync(path, CancellationToken.None);
+            if (!wasKnown) _repositoriesAwaitingTest.Add(path);
             if (version != _repositoryVersion || _exitRequested) return;
             _loadingRepository = true;
             RepositoryPathTextBox.Text = path;
@@ -568,13 +586,15 @@ public partial class MainWindow : Window
                 LoadAuthenticationOptions(detectedMode);
             }
             _repositoryPath = path;
-            _repositoryWasKnown = wasKnown;
+            _repositoryWasKnown = wasKnown && !_repositoriesAwaitingTest.Contains(path);
             _repositoryReady = true;
+            UpdateStartCommitButton();
         }
         catch (Exception exception)
         {
             if (version != _repositoryVersion || _exitRequested) return;
             RemoteTextBlock.Text = exception.Message;
+            UpdateStartCommitButton();
         }
     }
 
@@ -732,7 +752,7 @@ public partial class MainWindow : Window
 
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)
     {
-        if (_exitRequested || _manualReviewTask is { IsCompleted: false })
+        if (_exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit)
             return;
 
         try
@@ -749,6 +769,7 @@ public partial class MainWindow : Window
             _manualReviewCancellation = new CancellationTokenSource();
             _manualReviewTask = _runner.ReviewSingleCommitAsync(
                 settings, profile, revision, _manualReviewCancellation.Token);
+            UpdateStartCommitButton();
             await _manualReviewTask;
         }
         catch (OperationCanceledException)
@@ -768,6 +789,57 @@ public partial class MainWindow : Window
             ReviewCommitButton.IsEnabled = !_runner.IsRunning;
             StartButton.IsEnabled = !_runner.IsRunning;
             _trayStartItem.Enabled = !_runner.IsRunning;
+            UpdateStartCommitButton();
+        }
+    }
+
+    private async void SetStartCommit_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanSetStartCommit()) return;
+
+        var version = _repositoryVersion;
+        var repositoryPath = _repositoryPath;
+        var branch = _selectedBranch;
+        _settingStartCommit = true;
+        SetRepositoryControls(false);
+        StartButton.IsEnabled = false;
+        _trayStartItem.Enabled = false;
+        ReviewCommitButton.IsEnabled = false;
+        UpdateStartCommitButton();
+        try
+        {
+            var revision = CommitShaTextBox.Text.Trim();
+            var sha = await _git.ResolveCommitAsync(repositoryPath, revision, CancellationToken.None);
+            var head = await _git.GetBranchHeadAsync(repositoryPath, branch, CancellationToken.None);
+            if (!await _git.IsAncestorAsync(repositoryPath, sha, head, CancellationToken.None))
+                throw new InvalidOperationException(Localization.Text(
+                    "The selected commit is not an ancestor of the selected branch tip.",
+                    "Выбранный коммит не является предком вершины выбранной ветки."));
+            if (version != _repositoryVersion || repositoryPath != _repositoryPath || branch != _selectedBranch)
+                throw new InvalidOperationException(Localization.Text(
+                    "Repository selection changed. Select the start commit again.",
+                    "Выбор репозитория изменился. Выберите стартовый коммит снова."));
+            await _stateStore.SetStartCommitAsync(repositoryPath, branch, sha, CancellationToken.None);
+            CommitRun.Text = sha[..8];
+            AppendLog(Localization.Format(
+                "Automatic review will start with commit {0} on {1}.",
+                "Автоматическая проверка начнется с коммита {0} в {1}.",
+                sha[..8],
+                branch));
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception.Message);
+        }
+        finally
+        {
+            _settingStartCommit = false;
+            var idle = !_runner.IsRunning && _manualReviewTask is not { IsCompleted: false };
+            SetRepositoryControls(idle);
+            StartButton.IsEnabled = idle;
+            _trayStartItem.Enabled = idle;
+            ReviewCommitButton.IsEnabled = idle;
+            UpdateStartCommitButton();
         }
     }
 
@@ -776,7 +848,7 @@ public partial class MainWindow : Window
     private async Task StartReviewAsync()
     {
         var repositoryVersion = _repositoryVersion;
-        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false })
+        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false } || _settingStartCommit)
             return;
         StartButton.IsEnabled = false;
         _trayStartItem.Enabled = false;
@@ -937,6 +1009,7 @@ public partial class MainWindow : Window
         _trayStartItem.Enabled = !running;
         _trayStopItem.Enabled = running;
         ReviewCommitButton.IsEnabled = !running && _manualReviewTask is not { IsCompleted: false };
+        UpdateStartCommitButton();
     }
 
     private void SetRepositoryControls(bool enabled)
@@ -946,6 +1019,23 @@ public partial class MainWindow : Window
         BranchComboBox.IsEnabled = enabled;
         RefreshBranchesButton.IsEnabled = enabled;
     }
+
+    private string GetRepositoryTestIdentity() => string.Join('\n',
+        _repositoryPath,
+        _selectedBranch,
+        GetAuthenticationMode(),
+        SshKeyPathTextBox.Text.Trim(),
+        PlinkPathTextBox.Text.Trim());
+
+    private bool CanSetStartCommit() =>
+        !_exitRequested &&
+        _repositoryReady &&
+        !_runner.IsRunning &&
+        _manualReviewTask is not { IsCompleted: false } &&
+        !_settingStartCommit &&
+        (_repositoryWasKnown || _testedRepositoryIdentity == GetRepositoryTestIdentity());
+
+    private void UpdateStartCommitButton() => SetStartCommitButton.IsEnabled = CanSetStartCommit();
 
     private void SetStatus(string status)
     {

@@ -55,6 +55,48 @@ public sealed class StateStore
         finally { _gate.Release(); }
     }
 
+    internal async Task<(string? Cursor, string? PendingStart)> GetReviewPositionAsync(
+        string repositoryPath,
+        string branch,
+        CancellationToken cancellationToken)
+    {
+        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await LoadCoreAsync(cancellationToken);
+            if (!state.Repositories.TryGetValue(repositoryPath, out var repository))
+                return (null, null);
+            repository.LastReviewedCommits.TryGetValue(branch, out var cursor);
+            repository.PendingStartCommits.TryGetValue(branch, out var pendingStart);
+            return (cursor, pendingStart);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task SetStartCommitAsync(
+        string repositoryPath,
+        string branch,
+        string sha,
+        CancellationToken cancellationToken)
+    {
+        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var state = await LoadCoreAsync(cancellationToken);
+            if (!state.Repositories.TryGetValue(repositoryPath, out var repository))
+            {
+                repository = new RepositoryReviewState();
+                state.Repositories.Add(repositoryPath, repository);
+            }
+            repository.LastReviewedCommits.Remove(branch);
+            repository.PendingStartCommits[branch] = sha;
+            await SaveCoreAsync(state, cancellationToken);
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task SetCursorAsync(
         string repositoryPath,
         string branch,
@@ -72,6 +114,7 @@ public sealed class StateStore
                 state.Repositories.Add(repositoryPath, repository);
             }
             repository.LastReviewedCommits[branch] = sha;
+            repository.PendingStartCommits.Remove(branch);
             await SaveCoreAsync(state, cancellationToken);
         }
         finally { _gate.Release(); }
@@ -123,13 +166,16 @@ public sealed class StateStore
         var state = new RepositoryState();
         foreach (var (path, savedRepository) in savedState.Repositories)
         {
-            if (savedRepository?.LastReviewedCommits is null)
+            if (savedRepository?.LastReviewedCommits is null || savedRepository.PendingStartCommits is null)
                 throw new InvalidDataException("Invalid repository state entry.");
             var normalizedPath = NormalizeRepositoryPath(path);
             if (!state.Repositories.TryAdd(normalizedPath, new RepositoryReviewState
             {
                 LastReviewedCommits = new Dictionary<string, string>(
                     savedRepository.LastReviewedCommits,
+                    StringComparer.Ordinal),
+                PendingStartCommits = new Dictionary<string, string>(
+                    savedRepository.PendingStartCommits,
                     StringComparer.Ordinal)
             }))
                 throw new InvalidDataException("State contains duplicate repository paths.");

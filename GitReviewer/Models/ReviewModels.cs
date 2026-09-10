@@ -31,6 +31,8 @@ public sealed class RepositoryReviewState
 {
     public Dictionary<string, string> LastReviewedCommits { get; set; } =
         new(StringComparer.Ordinal);
+    public Dictionary<string, string> PendingStartCommits { get; set; } =
+        new(StringComparer.Ordinal);
 }
 
 public enum ReviewStage { Started, PreparingDiff, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled, Tool }

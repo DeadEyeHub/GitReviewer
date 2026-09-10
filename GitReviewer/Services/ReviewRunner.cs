@@ -196,7 +196,8 @@ public sealed class ReviewRunner
         await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
         repositoryPath = await _git.GetRepositoryRootAsync(repositoryPath, cancellationToken);
         var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
-        var previousCommit = await _stateStore.GetCursorAsync(repositoryPath, branch, cancellationToken);
+        var position = await _stateStore.GetReviewPositionAsync(repositoryPath, branch, cancellationToken);
+        var previousCommit = position.Cursor;
 
         if (settings.PullEnabled)
         {
@@ -223,7 +224,21 @@ public sealed class ReviewRunner
             Log?.Invoke(Localization.Text("Git fetch completed.", "Git fetch выполнен."));
         }
 
-        if (previousCommit is null)
+        if (position.PendingStart is not null)
+        {
+            var head = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+            if (!await _git.IsAncestorAsync(repositoryPath, position.PendingStart, head, cancellationToken))
+                throw new GitException(Localization.Text(
+                    "The selected start commit is not an ancestor of the selected branch tip.",
+                    "Выбранный стартовый коммит не является предком вершины выбранной ветки."));
+            Log?.Invoke(Localization.Format(
+                "Starting automatic review with selected commit {0}.",
+                "Автоматическая проверка начинается с выбранного коммита {0}.",
+                Short(position.PendingStart)));
+            await ProcessCommitAsync(repositoryPath, branch, position.PendingStart, profile, cancellationToken);
+            previousCommit = position.PendingStart;
+        }
+        else if (previousCommit is null)
         {
             var initialHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
             Log?.Invoke(Localization.Format(

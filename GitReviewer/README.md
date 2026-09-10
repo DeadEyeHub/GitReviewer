@@ -15,6 +15,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Lets the model independently explore an immutable commit using read-only Git tools.
 - Allows manual review of any commit by its short or full SHA.
+- Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an editable system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
@@ -135,6 +136,9 @@ git ls-remote --exit-code <upstream-remote> <tracked-branch-ref>
 
 The remote and source ref are resolved from the selected branch, so the test
 uses the same remote as fetch (including non-origin remotes and custom fetch mappings).
+For a newly registered repository, a successful access test also enables the
+**Start from selected commit** button. A repository that was already present
+in `state.json` enables that action after local repository validation.
 SSH Agent mode explicitly uses Windows OpenSSH Client and
 the Windows `ssh-agent` service instead of Git for Windows' bundled SSH client.
 SSH connections run non-interactively. OpenSSH requires the server to already
@@ -154,6 +158,12 @@ processed.
 Manual review accepts a short or full hexadecimal commit SHA. It writes a
 separate report entry and does not change the automatic monitoring position in
 `state.json`. Stop automatic monitoring before starting a manual review.
+
+To choose where automatic monitoring begins, enter a short or full SHA in
+**Selected commit SHA**, then use **Start from selected commit** next to the
+current commit. The SHA must be an ancestor of the selected branch tip. It is
+stored as a pending start, so the selected commit is reviewed first. The normal
+branch cursor replaces it only after that review succeeds.
 
 ### Native Git Agent
 
