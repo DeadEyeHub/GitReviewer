@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using GitReviewer.Models;
@@ -6,16 +7,28 @@ namespace GitReviewer.Services;
 
 public sealed class GitService
 {
-    public async Task<string> GetRepositoryRootAsync(string repositoryPath, CancellationToken cancellationToken)
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> FetchLocks =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    public async Task<GitRepositoryIdentity> GetRepositoryIdentityAsync(
+        string repositoryPath,
+        CancellationToken cancellationToken)
     {
-        var root = await RunRequiredAsync(repositoryPath, cancellationToken, "rev-parse", "--show-toplevel");
-        root = root.TrimEnd('\r', '\n');
-        if (root.Length == 0 || root.Any(char.IsControl))
+        var output = await RunRequiredAsync(repositoryPath, cancellationToken,
+            "rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir");
+        var paths = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (paths.Length != 3 || paths.Any(path => path.Length == 0 || path.Any(char.IsControl)))
             throw new GitException(Localization.Text(
-                "Git returned an invalid repository root.",
-                "Git вернул недопустимый корень репозитория."));
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+                "Git returned invalid worktree information.",
+                "Git вернул некорректные сведения о worktree."));
+        return new GitRepositoryIdentity(
+            NormalizePath(paths[0]),
+            NormalizePath(paths[1]),
+            NormalizePath(paths[2]));
     }
+
+    public async Task<string> GetRepositoryRootAsync(string repositoryPath, CancellationToken cancellationToken)
+        => (await GetRepositoryIdentityAsync(repositoryPath, cancellationToken)).WorkTreeRoot;
 
     public async Task ValidateRepositoryAsync(string repositoryPath, CancellationToken cancellationToken)
     {
@@ -98,20 +111,35 @@ public sealed class GitService
         AppSettings settings,
         CancellationToken cancellationToken)
     {
+        var identity = await GetRepositoryIdentityAsync(repositoryPath, cancellationToken);
         var branch = await ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
-        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch)
-            ?? throw new GitException(Localization.Text("Selected branch has no remote.", "У выбранной ветки нет remote."));
-        if (remote.Url != ".")
-            ValidateRemoteForAuthenticationMode(remote.Url, settings.GitAuthenticationMode);
-        // An explicit remote-tracking destination never updates a local branch or checkout.
-        if (remote.Name == ".")
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch);
+        // Local-only repositories are valid review targets. Treat fetch as a no-op
+        // when the selected branch has no upstream instead of making a remote mandatory.
+        if (remote is null)
             return new GitResult(0, string.Empty, string.Empty);
-        if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-            return await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
-                "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", remote.Name, remote.MergeReference);
-        return await RunWithAuthenticationAsync(
-            repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
-            "--refmap=", "--", remote.Name, $"+{remote.MergeReference}:{branch}");
+        var resolvedRemote = remote.Value;
+        var fetchLock = FetchLocks.GetOrAdd(identity.CommonGitDirectory, _ => new SemaphoreSlim(1, 1));
+        await fetchLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (resolvedRemote.Url != ".")
+                ValidateRemoteForAuthenticationMode(resolvedRemote.Url, settings.GitAuthenticationMode);
+            // All linked worktrees use the common object store. Serializing fetches by
+            // git-common-dir avoids competing ref/object updates while Git reuses objects.
+            if (resolvedRemote.Name == ".")
+                return new GitResult(0, string.Empty, string.Empty);
+            if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+                return await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+                    "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
+            return await RunWithAuthenticationAsync(
+                repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+                "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
+        }
+        finally
+        {
+            fetchLock.Release();
+        }
     }
 
     public async Task<string> GetSelectedRemoteSummaryAsync(string path, string branch, CancellationToken token)
@@ -127,15 +155,17 @@ public sealed class GitService
     {
         await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var branch = await ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
-        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch)
-            ?? throw new GitException(Localization.Text(
-                "The selected branch does not track a remote branch.",
-                "Выбранная ветка не отслеживает удаленную ветку."));
-        if (remote.Url != ".")
-            ValidateRemoteForAuthenticationMode(remote.Url, settings.GitAuthenticationMode);
+        var remote = await TryGetUpstreamRemoteAsync(repositoryPath, cancellationToken, branch);
+        // Repository and branch validation above is sufficient for a local-only
+        // repository; there is no remote access to test in that case.
+        if (remote is null)
+            return;
+        var resolvedRemote = remote.Value;
+        if (resolvedRemote.Url != ".")
+            ValidateRemoteForAuthenticationMode(resolvedRemote.Url, settings.GitAuthenticationMode);
 
         var result = await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
-            "ls-remote", "--exit-code", remote.Name, remote.MergeReference);
+            "ls-remote", "--exit-code", resolvedRemote.Name, resolvedRemote.MergeReference);
         if (result.ExitCode != 0)
             throw new GitException(result.Error.Length > 0
                 ? result.Error.Trim()
@@ -231,7 +261,7 @@ public sealed class GitService
         RunCoreAsync(repositoryPath, null, token, (offset, limit), null, arguments);
 
     internal static Task<GitResult> ReadPageAsync(string repositoryPath, int offset, int limit,
-        CancellationToken token, Action<GitCommandTrace> trace, params string[] arguments) =>
+        CancellationToken token, Action<GitCommandTrace>? trace, params string[] arguments) =>
         RunCoreAsync(repositoryPath, null, token, (offset, limit), trace, arguments);
 
     private static async Task<GitResult> RunCoreAsync(
@@ -557,6 +587,9 @@ public sealed class GitService
                !remoteUrl[..colon].Contains('\\') &&
                !remoteUrl.Any(char.IsWhiteSpace);
     }
+
+    private static string NormalizePath(string path) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 }
 
 public sealed record GitResult(int ExitCode, string Output, string Error, bool HasMore = false);

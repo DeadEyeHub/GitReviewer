@@ -22,32 +22,57 @@ public sealed class StateStore
         finally { _gate.Release(); }
     }
 
-    public async Task<bool> RegisterRepositoryAsync(string repositoryPath, CancellationToken cancellationToken)
+    public async Task<bool> RegisterRepositoryAsync(
+        string repositoryIdentity,
+        string legacyRepositoryPath,
+        CancellationToken cancellationToken)
     {
-        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        repositoryIdentity = NormalizeRepositoryPath(repositoryIdentity);
+        legacyRepositoryPath = NormalizeRepositoryPath(legacyRepositoryPath);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var state = await LoadCoreAsync(cancellationToken);
-            if (state.Repositories.ContainsKey(repositoryPath)) return true;
-            state.Repositories.Add(repositoryPath, new RepositoryReviewState());
-            await SaveCoreAsync(state, cancellationToken);
-            return false;
+            var changed = false;
+            var wasKnown = state.Repositories.TryGetValue(repositoryIdentity, out var repository);
+            if (!legacyRepositoryPath.Equals(repositoryIdentity, PathComparison) &&
+                state.Repositories.Remove(legacyRepositoryPath, out var legacyRepository))
+            {
+                changed = true;
+                wasKnown = true;
+                if (repository is null)
+                {
+                    repository = legacyRepository;
+                    state.Repositories[repositoryIdentity] = repository;
+                }
+                else
+                {
+                    Merge(repository, legacyRepository);
+                }
+            }
+            if (repository is null)
+            {
+                state.Repositories.Add(repositoryIdentity, new RepositoryReviewState());
+                changed = true;
+            }
+            if (changed)
+                await SaveCoreAsync(state, cancellationToken);
+            return wasKnown;
         }
         finally { _gate.Release(); }
     }
 
     public async Task<string?> GetCursorAsync(
-        string repositoryPath,
+        string repositoryIdentity,
         string branch,
         CancellationToken cancellationToken)
     {
-        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        repositoryIdentity = NormalizeRepositoryPath(repositoryIdentity);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var state = await LoadCoreAsync(cancellationToken);
-            return state.Repositories.TryGetValue(repositoryPath, out var repository) &&
+            return state.Repositories.TryGetValue(repositoryIdentity, out var repository) &&
                 repository.LastReviewedCommits.TryGetValue(branch, out var sha)
                 ? sha
                 : null;
@@ -56,16 +81,16 @@ public sealed class StateStore
     }
 
     internal async Task<(string? Cursor, string? PendingStart)> GetReviewPositionAsync(
-        string repositoryPath,
+        string repositoryIdentity,
         string branch,
         CancellationToken cancellationToken)
     {
-        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        repositoryIdentity = NormalizeRepositoryPath(repositoryIdentity);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var state = await LoadCoreAsync(cancellationToken);
-            if (!state.Repositories.TryGetValue(repositoryPath, out var repository))
+            if (!state.Repositories.TryGetValue(repositoryIdentity, out var repository))
                 return (null, null);
             repository.LastReviewedCommits.TryGetValue(branch, out var cursor);
             repository.PendingStartCommits.TryGetValue(branch, out var pendingStart);
@@ -75,20 +100,20 @@ public sealed class StateStore
     }
 
     public async Task SetStartCommitAsync(
-        string repositoryPath,
+        string repositoryIdentity,
         string branch,
         string sha,
         CancellationToken cancellationToken)
     {
-        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        repositoryIdentity = NormalizeRepositoryPath(repositoryIdentity);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var state = await LoadCoreAsync(cancellationToken);
-            if (!state.Repositories.TryGetValue(repositoryPath, out var repository))
+            if (!state.Repositories.TryGetValue(repositoryIdentity, out var repository))
             {
                 repository = new RepositoryReviewState();
-                state.Repositories.Add(repositoryPath, repository);
+                state.Repositories.Add(repositoryIdentity, repository);
             }
             repository.LastReviewedCommits.Remove(branch);
             repository.PendingStartCommits[branch] = sha;
@@ -98,20 +123,20 @@ public sealed class StateStore
     }
 
     public async Task SetCursorAsync(
-        string repositoryPath,
+        string repositoryIdentity,
         string branch,
         string sha,
         CancellationToken cancellationToken)
     {
-        repositoryPath = NormalizeRepositoryPath(repositoryPath);
+        repositoryIdentity = NormalizeRepositoryPath(repositoryIdentity);
         await _gate.WaitAsync(cancellationToken);
         try
         {
             var state = await LoadCoreAsync(cancellationToken);
-            if (!state.Repositories.TryGetValue(repositoryPath, out var repository))
+            if (!state.Repositories.TryGetValue(repositoryIdentity, out var repository))
             {
                 repository = new RepositoryReviewState();
-                state.Repositories.Add(repositoryPath, repository);
+                state.Repositories.Add(repositoryIdentity, repository);
             }
             repository.LastReviewedCommits[branch] = sha;
             repository.PendingStartCommits.Remove(branch);
@@ -134,6 +159,14 @@ public sealed class StateStore
         if (version == RepositoryState.CurrentSchemaVersion)
             return Normalize(document.RootElement.Deserialize<RepositoryState>(JsonOptions)
                 ?? throw new InvalidDataException("Invalid repository state."));
+
+        if (version == 2)
+        {
+            var migrated = Normalize(document.RootElement.Deserialize<RepositoryState>(JsonOptions)
+                ?? throw new InvalidDataException("Invalid repository state."));
+            await SaveCoreAsync(migrated, cancellationToken);
+            return migrated;
+        }
 
         var legacy = document.RootElement.Deserialize<LegacyRepositoryState>(JsonOptions)
             ?? throw new InvalidDataException("Invalid legacy repository state.");
@@ -196,6 +229,29 @@ public sealed class StateStore
 
     private static string NormalizeRepositoryPath(string repositoryPath) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+
+    private static StringComparison PathComparison => OperatingSystem.IsWindows()
+        ? StringComparison.OrdinalIgnoreCase
+        : StringComparison.Ordinal;
+
+    private static void Merge(RepositoryReviewState target, RepositoryReviewState source)
+    {
+        foreach (var branch in source.LastReviewedCommits.Keys)
+            if (target.PendingStartCommits.ContainsKey(branch))
+                throw new InvalidDataException("Worktree states contain conflicting review positions.");
+        foreach (var branch in source.PendingStartCommits.Keys)
+            if (target.LastReviewedCommits.ContainsKey(branch))
+                throw new InvalidDataException("Worktree states contain conflicting review positions.");
+        MergeValues(target.LastReviewedCommits, source.LastReviewedCommits);
+        MergeValues(target.PendingStartCommits, source.PendingStartCommits);
+    }
+
+    private static void MergeValues(Dictionary<string, string> target, Dictionary<string, string> source)
+    {
+        foreach (var (branch, sha) in source)
+            if (!target.TryAdd(branch, sha) && !target[branch].Equals(sha, StringComparison.Ordinal))
+                throw new InvalidDataException("Worktree states contain conflicting branch values.");
+    }
 
     private sealed class LegacyRepositoryState
     {

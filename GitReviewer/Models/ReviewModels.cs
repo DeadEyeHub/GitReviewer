@@ -12,6 +12,16 @@ public sealed record Finding(
     string Side,
     string Description);
 
+public sealed record GitRepositoryIdentity(
+    string WorkTreeRoot,
+    string GitDirectory,
+    string CommonGitDirectory)
+{
+    public bool IsLinkedWorktree => !GitDirectory.Equals(
+        CommonGitDirectory,
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+}
+
 public sealed class ReviewResult
 {
     public List<Finding> Findings { get; } = [];
@@ -21,10 +31,10 @@ public sealed class ReviewResult
 
 public sealed class RepositoryState
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public Dictionary<string, RepositoryReviewState> Repositories { get; set; } =
-        new(StringComparer.OrdinalIgnoreCase);
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 }
 
 public sealed class RepositoryReviewState

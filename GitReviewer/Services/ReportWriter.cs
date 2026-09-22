@@ -9,11 +9,16 @@ public sealed class ReportWriter
 {
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-    public string GetReportPath(string repositoryPath, string branch)
+    public string GetReportPath(string repositoryPath, string branch, string? repositoryIdentity = null)
     {
-        var repositoryName = new DirectoryInfo(repositoryPath).Name;
+        var identityPath = Path.GetFullPath(repositoryIdentity ?? repositoryPath);
+        var identityDirectory = new DirectoryInfo(identityPath);
+        var repositoryName = identityDirectory.Name.Equals(".git", StringComparison.OrdinalIgnoreCase) &&
+                             identityDirectory.Parent is not null
+            ? identityDirectory.Parent.Name
+            : new DirectoryInfo(repositoryPath).Name;
         var identity = Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes($"{Path.GetFullPath(repositoryPath)}|{branch}")))[..10];
+            Encoding.UTF8.GetBytes($"{identityPath}|{branch}")))[..10];
         var fileName = SanitizeFileName($"{repositoryName}-{branch}-{identity}-review.md");
         return Path.Combine(AppPaths.ReportsDirectory, fileName);
     }
@@ -24,23 +29,30 @@ public sealed class ReportWriter
         CommitInfo commit,
         ReviewResult result,
         bool manualReview,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? repositoryIdentity = null)
     {
         await _writeLock.WaitAsync(cancellationToken);
         try
         {
-            var path = GetReportPath(repositoryPath, branch);
+            var path = GetReportPath(repositoryPath, branch, repositoryIdentity);
+            var legacyPath = repositoryIdentity is null
+                ? path
+                : GetReportPath(repositoryPath, branch);
+            var sourcePath = !File.Exists(path) && File.Exists(legacyPath)
+                ? legacyPath
+                : path;
             var marker = manualReview
                 ? $"<!-- manual-review:{commit.Sha}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()} -->"
                 : $"<!-- commit:{commit.Sha} -->";
             var existing = string.Empty;
-            if (File.Exists(path))
+            if (File.Exists(sourcePath))
             {
-                existing = await File.ReadAllTextAsync(path, cancellationToken);
+                existing = await File.ReadAllTextAsync(sourcePath, cancellationToken);
             }
 
             var text = new StringBuilder();
-            if (!File.Exists(path))
+            if (!File.Exists(sourcePath))
                 text.AppendLine(Localization.Text("# Git review report", "# Отчет проверки Git")).AppendLine();
 
             text.AppendLine(marker)
@@ -125,9 +137,11 @@ public sealed class ReportWriter
         }
     }
 
-    public void Open(string repositoryPath, string branch)
+    public void Open(string repositoryPath, string branch, string? repositoryIdentity = null)
     {
-        var path = GetReportPath(repositoryPath, branch);
+        var path = GetReportPath(repositoryPath, branch, repositoryIdentity);
+        if (!File.Exists(path) && repositoryIdentity is not null)
+            path = GetReportPath(repositoryPath, branch);
         if (!File.Exists(path))
             throw new FileNotFoundException(Localization.Text(
                 "No report exists for the selected project yet.",

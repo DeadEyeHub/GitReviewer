@@ -95,10 +95,12 @@ public sealed class ReviewRunner
             _activeCommit = string.Empty;
             var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
             await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
+            var identity = await _git.GetRepositoryIdentityAsync(repositoryPath, cancellationToken);
+            repositoryPath = identity.WorkTreeRoot;
             var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
             var sha = await _git.ResolveCommitAsync(repositoryPath, revision, cancellationToken);
             var result = await AnalyzeAndReportAsync(
-                repositoryPath, branch, sha, profile.Clone(), true, cancellationToken);
+                repositoryPath, identity.CommonGitDirectory, branch, sha, profile.Clone(), true, cancellationToken);
             Complete(repositoryPath, branch, sha, profile, result, true, cancellationToken);
             StatusChanged?.Invoke(Localization.Text("Manual review completed", "Ручная проверка завершена"));
             Log?.Invoke(Localization.Format(
@@ -194,9 +196,13 @@ public sealed class ReviewRunner
     {
         var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
         await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
-        repositoryPath = await _git.GetRepositoryRootAsync(repositoryPath, cancellationToken);
+        var identity = await _git.GetRepositoryIdentityAsync(repositoryPath, cancellationToken);
+        repositoryPath = identity.WorkTreeRoot;
         var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
-        var position = await _stateStore.GetReviewPositionAsync(repositoryPath, branch, cancellationToken);
+        await _stateStore.RegisterRepositoryAsync(
+            identity.CommonGitDirectory, repositoryPath, cancellationToken);
+        var position = await _stateStore.GetReviewPositionAsync(
+            identity.CommonGitDirectory, branch, cancellationToken);
         var previousCommit = position.Cursor;
 
         if (settings.PullEnabled)
@@ -226,8 +232,8 @@ public sealed class ReviewRunner
 
         if (position.PendingStart is not null)
         {
-            var head = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
-            if (!await _git.IsAncestorAsync(repositoryPath, position.PendingStart, head, cancellationToken))
+            var pendingHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+            if (!await _git.IsAncestorAsync(repositoryPath, position.PendingStart, pendingHead, cancellationToken))
                 throw new GitException(Localization.Text(
                     "The selected start commit is not an ancestor of the selected branch tip.",
                     "Выбранный стартовый коммит не является предком вершины выбранной ветки."));
@@ -235,7 +241,8 @@ public sealed class ReviewRunner
                 "Starting automatic review with selected commit {0}.",
                 "Автоматическая проверка начинается с выбранного коммита {0}.",
                 Short(position.PendingStart)));
-            await ProcessCommitAsync(repositoryPath, branch, position.PendingStart, profile, cancellationToken);
+            await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
+                branch, position.PendingStart, profile, cancellationToken);
             previousCommit = position.PendingStart;
         }
         else if (previousCommit is null)
@@ -245,7 +252,8 @@ public sealed class ReviewRunner
                 "First connection: reviewing current commit {0}.",
                 "Первое подключение: проверяется текущий коммит {0}.",
                 Short(initialHead)));
-            await ProcessCommitAsync(repositoryPath, branch, initialHead, profile, cancellationToken);
+            await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
+                branch, initialHead, profile, cancellationToken);
             previousCommit = initialHead;
         }
 
@@ -260,19 +268,22 @@ public sealed class ReviewRunner
 
         var commits = await _git.GetCommitsAfterAsync(repositoryPath, previousCommit, head, cancellationToken);
         foreach (var sha in commits)
-            await ProcessCommitAsync(repositoryPath, branch, sha, profile, cancellationToken);
+            await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
+                branch, sha, profile, cancellationToken);
     }
 
     private async Task ProcessCommitAsync(
         string repositoryPath,
+        string repositoryIdentity,
         string branch,
         string sha,
         ModelProfile profile,
         CancellationToken cancellationToken)
     {
-        var result = await AnalyzeAndReportAsync(repositoryPath, branch, sha, profile, false, cancellationToken);
+        var result = await AnalyzeAndReportAsync(
+            repositoryPath, repositoryIdentity, branch, sha, profile, false, cancellationToken);
         Emit(ReviewStage.SavingCursor, profile, sha);
-        await _stateStore.SetCursorAsync(repositoryPath, branch, sha, cancellationToken);
+        await _stateStore.SetCursorAsync(repositoryIdentity, branch, sha, cancellationToken);
         Complete(repositoryPath, branch, sha, profile, result, false, cancellationToken);
         Log?.Invoke(Localization.Format(
             "Commit {0} reviewed, findings: {1}.",
@@ -282,6 +293,7 @@ public sealed class ReviewRunner
 
     private async Task<ReviewResult> AnalyzeAndReportAsync(
         string repositoryPath,
+        string repositoryIdentity,
         string branch,
         string sha,
         ModelProfile profile,
@@ -308,7 +320,7 @@ public sealed class ReviewRunner
 
         Emit(ReviewStage.Report, profile, sha);
         await _reportWriter.AppendAsync(
-            repositoryPath, branch, commit, result, manualReview, cancellationToken);
+            repositoryPath, branch, commit, result, manualReview, cancellationToken, repositoryIdentity);
         return result;
     }
 

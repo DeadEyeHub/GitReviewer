@@ -11,7 +11,8 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
 - Reviews the selected local or remote-tracking branch tip on first connection, without scanning older commits.
 - Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
-- Supports local-only repositories with automatic fetch disabled.
+- Supports local-only repositories without requiring a remote; automatic fetch is skipped when no upstream is configured.
+- Supports linked Git worktrees that share one common object store and repository state.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Lets the model independently explore an immutable commit using read-only Git tools.
 - Allows manual review of any commit by its short or full SHA.
@@ -82,16 +83,36 @@ ref is fetched from its configured remote/source ref. For a local selection,
 only its upstream objects are fetched; the local branch is deliberately not
 advanced. Select `refs/remotes/...` to monitor incoming remote commits. Fetch
 uses explicit refspecs and disables configured ref mappings so it cannot update
-local branches. Disable fetch for local-only branches without an upstream.
+local branches. For a local-only branch without an upstream, fetch is a no-op.
 The legacy configuration key `pull_enabled` is retained, but now means fetch.
 
 Automatic cursors and report names use the full case-sensitive ref. State files
-record `SchemaVersion: 1`. Unversioned legacy files are migrated atomically on
+record `SchemaVersion: 3`. Unversioned and version 1 legacy files are migrated atomically on
 load: every short local branch name is converted to a full ref, including names
 that themselves begin with `refs/heads/`. Versioned keys are never reinterpreted
 as short names, and differently cased keys are not merged. Unknown schema versions
 are rejected without rewriting the file. Old report files are retained, while
 new reports use full-ref identities.
+
+### Linked Worktrees
+
+Folders created with `git worktree add` are supported. The application resolves
+the selected worktree root, its administrative Git directory, and the shared
+directory returned by `git rev-parse --git-common-dir`. The worktree root remains
+the context for committed file and attribute reads, while the normalized common
+Git directory identifies repository state, reports, and fetch coordination.
+
+All linked worktrees therefore reuse the same object database. Fetches that
+target the same common Git directory are serialized so they cannot compete while
+updating shared objects or refs; Git downloads only objects missing from that
+store. Branch cursors and pending start commits remain independent because they
+are keyed by full case-sensitive refs. No checkout or worktree files are changed.
+
+Schema version 2 repository keys used worktree roots. They are upgraded to
+schema version 3 and lazily moved to the common Git directory when a worktree is
+selected. States from multiple worktree paths are merged only when duplicate
+branch values agree; conflicting cursors or pending starts are rejected instead
+of silently choosing one.
 
 The application does not clone repositories. Select an existing local Git
 working directory, with or without a configured remote.
@@ -136,9 +157,11 @@ git ls-remote --exit-code <upstream-remote> <tracked-branch-ref>
 
 The remote and source ref are resolved from the selected branch, so the test
 uses the same remote as fetch (including non-origin remotes and custom fetch mappings).
-For a newly registered repository, a successful access test also enables the
-**Start from selected commit** button. A repository that was already present
-in `state.json` enables that action after local repository validation.
+For a newly registered remote-backed repository, a successful access test also
+enables the **Start from selected commit** button. A local-only repository needs
+no remote test; local repository and branch validation enables the action. A
+repository that was already present in `state.json` also enables it after local
+validation.
 SSH Agent mode explicitly uses Windows OpenSSH Client and
 the Windows `ssh-agent` service instead of Git for Windows' bundled SSH client.
 SSH connections run non-interactively. OpenSSH requires the server to already
@@ -358,7 +381,7 @@ responses from requests started before form edits or newer operations are ignore
 
 ### Focused Checks
 
-The existing ignored `GitReviewer.Tests` project links production services and
+The separate `GitReviewer.Tests` repository links production services and
 uses a fake HTTP handler, isolated data paths, and temporary Git repositories.
 Its extended Git transport fixture runs on Linux using a local SSH shim; no
 server or credentials are required:
@@ -368,7 +391,9 @@ dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
 dotnet run --project ../GitReviewer.Tests/PromptMigration/PromptMigration.csproj
 ```
 
-Run this command from `GitReviewer`. Tests cover case-sensitive refs, custom
+Clone or place the test repository as `GitReviewer.Tests` next to `GitReviewer`,
+then run these commands from `GitReviewer`. Tests cover linked worktrees and their
+shared object store, case-sensitive refs, custom
 remote mappings, dirty checkout preservation, cursor migration, manual and
 automatic completion, native multi-turn/multi-call tool flow, paged output,
 unknown tools, malformed arguments/responses, incomplete finals, budgets,
@@ -390,6 +415,9 @@ User-specific files are stored in:
 ```text
 %LOCALAPPDATA%\GitReviewer
 ```
+
+For isolated or portable runs, set `GITREVIEWER_DATA_DIR` before starting the
+application to use a different data directory.
 
 The directory contains:
 

@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _loadingRepository = true;
     private bool _repositoryReady;
     private string _repositoryPath = string.Empty;
+    private string _repositoryCommonGitDirectory = string.Empty;
     private bool _repositoryWasKnown;
     private readonly HashSet<string> _repositoriesAwaitingTest = new(StringComparer.OrdinalIgnoreCase);
     private string _testedRepositoryIdentity = string.Empty;
@@ -188,8 +189,8 @@ public partial class MainWindow : Window
             "Run git fetch before each check",
             "Выполнять git fetch перед каждой проверкой");
         PullExplanationTextBlock.Text = Localization.Text(
-            "Fetch updates remote-tracking refs only, never the checkout. Select refs/remotes/... to review remote updates; local branches are read as-is. Disable for local-only repositories.",
-            "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Отключите для локального репозитория.");
+            "Fetch updates remote-tracking refs only, never the checkout. Select refs/remotes/... to review remote updates; local branches are read as-is. It is skipped when no remote is configured.",
+            "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Если remote не настроен, fetch пропускается.");
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
         SelectedCommitLabel.Text = Localization.Text("Selected commit SHA", "SHA выбранного коммита");
@@ -538,6 +539,7 @@ public partial class MainWindow : Window
         var selected = _selectedBranch;
         _repositoryReady = false;
         _repositoryPath = string.Empty;
+        _repositoryCommonGitDirectory = string.Empty;
         _repositoryWasKnown = false;
         UpdateStartCommitButton();
         _loadingRepository = true;
@@ -546,11 +548,13 @@ public partial class MainWindow : Window
         _loadingRepository = false;
         RemoteTextBlock.Text = string.Empty;
         RemoteAccessStatusTextBlock.Text = string.Empty;
+        RepositoryPathTextBox.ToolTip = null;
         try
         {
             var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
             await _git.ValidateRepositoryAsync(path, CancellationToken.None);
-            path = await _git.GetRepositoryRootAsync(path, CancellationToken.None);
+            var identity = await _git.GetRepositoryIdentityAsync(path, CancellationToken.None);
+            path = identity.WorkTreeRoot;
             var branches = await _git.GetBranchesAsync(path, CancellationToken.None);
             if (version != _repositoryVersion || _exitRequested) return;
             // Keep a missing selection visible, but allow choosing another existing ref.
@@ -572,11 +576,18 @@ public partial class MainWindow : Window
             var remote = await _git.GetSelectedRemoteSummaryAsync(path, branch, CancellationToken.None);
             var detectedMode = _authenticationNeedsDetection
                 ? await _git.DetectAuthenticationModeAsync(path, CancellationToken.None, branch) : null;
-            var wasKnown = await _stateStore.RegisterRepositoryAsync(path, CancellationToken.None);
-            if (!wasKnown) _repositoriesAwaitingTest.Add(path);
+            var wasKnown = await _stateStore.RegisterRepositoryAsync(
+                identity.CommonGitDirectory, path, CancellationToken.None);
+            if (!wasKnown) _repositoriesAwaitingTest.Add(identity.CommonGitDirectory);
             if (version != _repositoryVersion || _exitRequested) return;
             _loadingRepository = true;
             RepositoryPathTextBox.Text = path;
+            RepositoryPathTextBox.ToolTip = identity.IsLinkedWorktree
+                ? Localization.Format(
+                    "Linked worktree. Shared Git data: {0}",
+                    "Связанный worktree. Общие данные Git: {0}",
+                    identity.CommonGitDirectory)
+                : null;
             _loadingRepository = false;
             RemoteTextBlock.Text = remote.Length == 0
                 ? Localization.Text("Not configured", "Не настроен")
@@ -586,7 +597,11 @@ public partial class MainWindow : Window
                 LoadAuthenticationOptions(detectedMode);
             }
             _repositoryPath = path;
-            _repositoryWasKnown = wasKnown && !_repositoriesAwaitingTest.Contains(path);
+            _repositoryCommonGitDirectory = identity.CommonGitDirectory;
+            // A local-only repository needs no remote authorization. Local
+            // repository and branch validation is enough to select a baseline.
+            _repositoryWasKnown = remote.Length == 0 ||
+                wasKnown && !_repositoriesAwaitingTest.Contains(identity.CommonGitDirectory);
             _repositoryReady = true;
             UpdateStartCommitButton();
         }
@@ -799,6 +814,7 @@ public partial class MainWindow : Window
 
         var version = _repositoryVersion;
         var repositoryPath = _repositoryPath;
+        var repositoryIdentity = _repositoryCommonGitDirectory;
         var branch = _selectedBranch;
         _settingStartCommit = true;
         SetRepositoryControls(false);
@@ -815,11 +831,12 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException(Localization.Text(
                     "The selected commit is not an ancestor of the selected branch tip.",
                     "Выбранный коммит не является предком вершины выбранной ветки."));
-            if (version != _repositoryVersion || repositoryPath != _repositoryPath || branch != _selectedBranch)
+            if (version != _repositoryVersion || repositoryPath != _repositoryPath ||
+                repositoryIdentity != _repositoryCommonGitDirectory || branch != _selectedBranch)
                 throw new InvalidOperationException(Localization.Text(
                     "Repository selection changed. Select the start commit again.",
                     "Выбор репозитория изменился. Выберите стартовый коммит снова."));
-            await _stateStore.SetStartCommitAsync(repositoryPath, branch, sha, CancellationToken.None);
+            await _stateStore.SetStartCommitAsync(repositoryIdentity, branch, sha, CancellationToken.None);
             CommitRun.Text = sha[..8];
             AppendLog(Localization.Format(
                 "Automatic review will start with commit {0} on {1}.",
@@ -939,8 +956,9 @@ public partial class MainWindow : Window
         {
             var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
             var branch = await _git.ResolveBranchAsync(path, _selectedBranch, CancellationToken.None);
+            var identity = await _git.GetRepositoryIdentityAsync(path, CancellationToken.None);
             if (_exitRequested) return;
-            _reportWriter.Open(path, branch);
+            _reportWriter.Open(identity.WorkTreeRoot, branch, identity.CommonGitDirectory);
         }
         catch (Exception exception)
         {
@@ -1021,7 +1039,7 @@ public partial class MainWindow : Window
     }
 
     private string GetRepositoryTestIdentity() => string.Join('\n',
-        _repositoryPath,
+        _repositoryCommonGitDirectory,
         _selectedBranch,
         GetAuthenticationMode(),
         SshKeyPathTextBox.Text.Trim(),

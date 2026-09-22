@@ -5,9 +5,7 @@ namespace GitReviewer.Services;
 
 public static class AppPaths
 {
-    public static string DataDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "GitReviewer");
+    public static string DataDirectory { get; } = ResolveDataDirectory();
 
     public static string ModelsConfig => Path.Combine(DataDirectory, "models.conf");
     public static string SettingsConfig => Path.Combine(DataDirectory, "settings.conf");
@@ -16,6 +14,14 @@ public static class AppPaths
     public static string ReportsDirectory => Path.Combine(DataDirectory, "reports");
     public static string JournalLog => Path.Combine(DataDirectory, "journal.log");
     public static string ModelLog => Path.Combine(DataDirectory, "model-log.log");
+
+    private static string ResolveDataDirectory()
+    {
+        var configured = Environment.GetEnvironmentVariable("GITREVIEWER_DATA_DIR");
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GitReviewer")
+            : Path.GetFullPath(configured);
+    }
 
     public static void EnsureCreated()
     {
