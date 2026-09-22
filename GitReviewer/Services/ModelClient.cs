@@ -77,7 +77,8 @@ public sealed class ModelClient
         string systemPrompt,
         CancellationToken cancellationToken,
         Action<ReviewStage>? progress = null,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Action<ReviewStage, string>? activity = null)
     {
         ValidateProfile(profile);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -177,6 +178,7 @@ public sealed class ModelClient
                         var safeName = GitToolSession.Names.Contains(name) ? name : "unsupported_tool";
                         var arguments = function.GetProperty("arguments").GetString() ?? "";
                         log?.Invoke($"Git tool {callNumber}: {safeName} arguments: {arguments}");
+                        activity?.Invoke(ReviewStage.Tool, DescribeToolCall(callNumber, safeName, arguments));
                         string result;
                         try
                         {
@@ -191,6 +193,7 @@ public sealed class ModelClient
                             unresolvedErrors.Add(safeName);
                             result = "{\"status\":\"error\",\"message\":\"Invalid arguments or unsupported tool. Use the advertised schema, allowed SHAs, exact paths and expected offsets; retry within budget.\"}";
                             log?.Invoke($"Git tool {callNumber}: {safeName} rejected");
+                            activity?.Invoke(ReviewStage.ToolRejected, safeName);
                         }
                         catch (OperationCanceledException)
                         {
@@ -200,6 +203,7 @@ public sealed class ModelClient
                         catch
                         {
                             log?.Invoke($"Git tool {callNumber}: {safeName} failed");
+                            activity?.Invoke(ReviewStage.ToolRejected, safeName);
                             throw;
                         }
                         output += result.Length;
@@ -234,6 +238,7 @@ public sealed class ModelClient
                     if (formatRetries >= 2 || round == 31)
                         throw new InvalidDataException($"Invalid report format: {reason} No correction attempts remain. Review not saved. Diagnostic: {diagnosticPath}");
                     formatRetries++;
+                    activity?.Invoke(ReviewStage.FormatCorrection, $"{formatRetries}/2");
                     messages.Add(new { role = "assistant", content = originalContent });
                     messages.Add(new { role = "user", content =
                         $"Report format correction {formatRetries}/2. {reason}\n" +
@@ -255,6 +260,25 @@ public sealed class ModelClient
             throw new InvalidDataException("Malformed native tool response; review not saved.", exception);
         }
         catch { log?.Invoke("Git agent: failed"); throw; }
+    }
+
+    private static string DescribeToolCall(int number, string name, string arguments)
+    {
+        var summary = $"#{number} {name}";
+        try
+        {
+            using var document = JsonDocument.Parse(arguments);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return summary;
+            if (document.RootElement.TryGetProperty("path", out var path) && path.ValueKind == JsonValueKind.String)
+            {
+                var value = path.GetString() ?? "";
+                summary += " — " + new string(value.Select(c => char.IsControl(c) ? ' ' : c).Take(160).ToArray());
+            }
+            if (document.RootElement.TryGetProperty("offset", out var offset) && offset.TryGetInt32(out var position) && position > 0)
+                summary += Localization.Format(" (continuation, offset {0})", " (продолжение, смещение {0})", position);
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException) { }
+        return summary;
     }
 
     private static List<string> GetReportFormatErrors(string content)

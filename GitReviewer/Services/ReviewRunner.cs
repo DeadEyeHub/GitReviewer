@@ -313,7 +313,7 @@ public sealed class ReviewRunner
         {
             var response = await _model.ReviewAsync(profile, tools, branch, _configuration.LoadPrompt(), cancellationToken,
                 stage => Emit(stage, profile, sha), message =>
-                    Publish(ModelLog, message));
+                    Publish(ModelLog, message), (stage, detail) => Emit(stage, profile, sha, detail));
             Emit(ReviewStage.Parsing, profile, sha);
             result = ReviewParser.Parse(response);
         }

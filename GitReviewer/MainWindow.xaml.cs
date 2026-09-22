@@ -1108,8 +1108,26 @@ public partial class MainWindow : Window
         if (detail.Length > 2000)
             detail = detail[..950] + " ... " + detail[^1045..];
         var entry = $"{model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}";
-        _journal.Append(entry);
         _details.Append(entry);
+        // Transport events stay in the detailed log; the journal describes review activity.
+        if (progress.Stage is ReviewStage.Waiting or ReviewStage.Response or ReviewStage.Parsing or ReviewStage.SavingCursor)
+            return;
+        var description = progress.Stage switch
+        {
+            ReviewStage.Started => Localization.Text("Commit review started", "Начата проверка коммита"),
+            ReviewStage.PreparingDiff => Localization.Text("Preparing commit changes", "Подготовка изменений коммита"),
+            ReviewStage.Request => Localization.Text("Model is analyzing the available context", "Модель анализирует доступный контекст"),
+            ReviewStage.Tool => Localization.Text("Calling Git tool", "Вызов Git-инструмента"),
+            ReviewStage.ToolRejected => Localization.Text("Git tool could not complete the call", "Не удалось выполнить вызов Git-инструмента"),
+            ReviewStage.FormatCorrection => Localization.Text("Requesting report format correction", "Запрошено исправление формата отчёта"),
+            ReviewStage.Report => Localization.Text("Saving review report", "Сохранение отчёта проверки"),
+            ReviewStage.Completed => Localization.Text("Commit review completed", "Проверка коммита завершена"),
+            ReviewStage.Failed => Localization.Text("Commit review failed", "Ошибка проверки коммита"),
+            ReviewStage.Canceled => Localization.Text("Commit review canceled", "Проверка коммита отменена"),
+            _ => progress.Stage.ToString()
+        };
+        var shortCommit = commit[..Math.Min(8, commit.Length)];
+        _journal.Append($"{model} | {shortCommit} | {description}{(detail.Length > 0 ? " | " + detail : "")}");
     }
 
     private void NotifyReviewed(CommitReviewed reviewed)
