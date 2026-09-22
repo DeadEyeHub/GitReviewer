@@ -64,7 +64,26 @@ public sealed class GitToolSession
         return result.Output.Length == 0 && !result.HasMore;
     }
 
-    public static readonly string[] Names = ["git_metadata", "git_history", "git_changed_files", "git_diff", "git_file"];
+    public static readonly string[] Names = ["git_metadata", "git_history", "git_changed_files", "git_diff", "git_file", "git_tree", "git_search"];
+
+    private static Dictionary<string, object> Properties(string name)
+    {
+        var properties = new Dictionary<string, object>
+        {
+            ["commit"] = new { type = "string", description = "Discovered full SHA; defaults to reviewed SHA." }
+        };
+        if (name is not ("git_metadata" or "git_history"))
+            properties["offset"] = new { type = "integer", minimum = 0, maximum = 2_000_000, description = "Initially 0; follow next_offset with the same arguments." };
+        if (name == "git_file")
+        {
+            properties["path"] = new { type = "string", description = "Exact repository-relative file path." };
+            properties["start_line"] = new { type = "integer", minimum = 1, maximum = 2_000_000, description = "Optional inclusive 1-based range start; requires end_line. Returns numbered lines." };
+            properties["end_line"] = new { type = "integer", minimum = 1, maximum = 2_000_000, description = "Inclusive range end, at most 500 lines. Range reads support blobs up to 512000 characters." };
+        }
+        if (name == "git_search")
+            properties["query"] = new { type = "string", minLength = 1, maxLength = 1024, description = "Literal case-sensitive text, not a regular expression. Search committed text files only." };
+        return properties;
+    }
     public static object[] Definitions => Names.Select(name => (object)new
     {
         type = "function",
@@ -77,18 +96,15 @@ public sealed class GitToolSession
                 "git_history" => "Discover up to 20 ancestors and their parents from an allowed commit. Bounded local history only.",
                 "git_changed_files" => "Page changed file names/status for reviewed SHA against first parent (root against empty tree). Start offset=0 and follow next_offset until null.",
                 "git_diff" => "Read the reviewed commit patch, including binary/mode changes. Start offset=0 and follow next_offset until null before final report.",
+                "git_tree" => "List all committed files recursively, including modes and object IDs. Follow every next_offset until null.",
+                "git_search" => "Search literal text in an allowed commit. Returns matching paths, line numbers and lines; binary files are skipped. Follow every next_offset until null. No matches is a successful empty result.",
                 _ => "Page committed blob content at path and allowed commit, never working files. Start offset=0 and follow next_offset until null. Symlinks return link text, not their target."
             },
             parameters = new
             {
                 type = "object",
-                properties = new
-                {
-                    commit = new { type = "string", description = "Full SHA discovered through metadata/history; omit for reviewed SHA." },
-                    path = new { type = "string", description = "git_file only: exact repository-relative path." },
-                    offset = new { type = "integer", minimum = 0, maximum = 2_000_000, description = "Character offset, initially 0; use returned next_offset." }
-                },
-                required = name == "git_file" ? new[] { "path" } : Array.Empty<string>(),
+                properties = Properties(name),
+                required = name == "git_file" ? new[] { "path" } : name == "git_search" ? new[] { "query" } : Array.Empty<string>(),
                 additionalProperties = false
             }
         }
@@ -111,7 +127,7 @@ public sealed class GitToolSession
         if (args.ValueKind != JsonValueKind.Object) throw new ArgumentException("Arguments must be a JSON object.");
         var seen = new HashSet<string>();
         foreach (var property in args.EnumerateObject())
-            if (!seen.Add(property.Name) || property.Name is not ("commit" or "path" or "offset"))
+            if (!seen.Add(property.Name) || !Properties(name).ContainsKey(property.Name))
                 throw new ArgumentException("Unknown or duplicate argument.");
         var commit = args.TryGetProperty("commit", out var c) ? c.GetString() : Sha;
         if (commit is null || !_commits.Contains(commit)) throw new ArgumentException("Use the reviewed SHA or a full SHA returned by metadata/history.");
@@ -127,7 +143,15 @@ public sealed class GitToolSession
             throw new ArgumentException("Use an exact relative Git path without traversal or revision syntax.");
         if (name is "git_metadata" or "git_history" && offset != 0)
             throw new ArgumentException("Metadata/history do not support paging; explore a returned ancestor SHA instead.");
-        var key = name + ":" + commit + ":" + path;
+        var query = args.TryGetProperty("query", out var q) ? q.GetString() : null;
+        if (name == "git_search" && (string.IsNullOrEmpty(query) || query.Length > 1024 || query.Any(char.IsControl)))
+            throw new ArgumentException("Use a nonempty literal search query without control characters, up to 1024 characters.");
+        int? startLine = args.TryGetProperty("start_line", out var s) ? s.GetInt32() : null;
+        int? endLine = args.TryGetProperty("end_line", out var e) ? e.GetInt32() : null;
+        if (startLine.HasValue != endLine.HasValue || startLine is < 1 or > 2_000_000 ||
+            endLine is < 1 or > 2_000_000 || endLine < startLine || endLine - startLine >= 500)
+            throw new ArgumentException("Provide both start_line and end_line as an inclusive range of 1 to 500 lines.");
+        var key = JsonSerializer.Serialize(new { name, commit, path, query, startLine, endLine });
         if (offset != _nextOffsets.GetValueOrDefault(key))
             throw new ArgumentException("Read each resource sequentially from offset 0 using its next_offset.");
         var command = name switch
@@ -136,20 +160,33 @@ public sealed class GitToolSession
             "git_history" => new[] { "log", "--no-show-signature", "--format=%H %P", "-n", "20", commit, "--" },
             "git_changed_files" => DiffArguments(true),
             "git_diff" => DiffArguments(false),
+            "git_tree" => new[] { "ls-tree", "-r", "--full-tree", commit, "--" },
+            "git_search" => new[] { "grep", "--no-color", "--no-ext-grep", "--no-textconv", "-I", "-n", "-F", "-e", query!, commit, "--" },
             _ => new[] { "cat-file", "blob", commit + ":" + path }
         };
         GitResult result;
-        if (name is "git_diff" or "git_changed_files")
+        if (name is "git_diff" or "git_changed_files" or "git_tree" or "git_search" || startLine.HasValue)
         {
-            if (!_snapshots.TryGetValue(name, out var snapshot))
+            if (!_snapshots.TryGetValue(key, out var snapshot))
             {
                 // Render once: live attributes/config must not alter or shorten later pages.
                 var captured = await GitService.ReadPageAsync(_repository, 0,
                     SnapshotLimit - _snapshots.Values.Sum(value => value.Length), token, trace, command);
-                if (captured.ExitCode != 0 || captured.HasMore)
+                if ((captured.ExitCode != 0 && !(name == "git_search" && captured.ExitCode == 1 && captured.Output.Length == 0)) || captured.HasMore)
                     throw new GitException("Git snapshot unavailable or exceeds the 512000-character session limit; review is incomplete.");
                 snapshot = captured.Output;
-                _snapshots.Add(name, snapshot);
+                if (startLine.HasValue)
+                {
+                    if (snapshot.Contains('\0')) throw new GitException("Line ranges require a text blob.");
+                    var lines = snapshot.Split('\n');
+                    var lineCount = snapshot.Length == 0 ? 0 : lines.Length - (snapshot.EndsWith('\n') ? 1 : 0);
+                    if (startLine.Value > lineCount) throw new ArgumentException("start_line is beyond the end of the file.");
+                    snapshot = string.Concat(Enumerable.Range(startLine.Value, Math.Min(endLine!.Value, lineCount) - startLine.Value + 1)
+                        .Select(line => $"{line}: {lines[line - 1].TrimEnd('\r')}\n"));
+                    if (snapshot.Length > SnapshotLimit - _snapshots.Values.Sum(value => value.Length))
+                        throw new GitException("Numbered range exceeds the session snapshot limit.");
+                }
+                _snapshots.Add(key, snapshot);
             }
             if (offset > snapshot.Length) throw new GitException("Snapshot ended before the requested offset; review is incomplete.");
             var length = Math.Min(PageSize, snapshot.Length - offset);
@@ -171,7 +208,7 @@ public sealed class GitToolSession
                 if (id.Length == 40 && id.All(Uri.IsHexDigit) && _commits.Count < 1024) _commits.Add(id);
         }
         var next = offset + result.Output.Length;
-        if (name is "git_diff" or "git_changed_files" or "git_file") _nextOffsets[key] = next;
+        if (name is not ("git_metadata" or "git_history")) _nextOffsets[key] = next;
         if (result.HasMore) _pending.Add(key);
         else _pending.Remove(key);
         if (name == "git_diff") DiffComplete = !result.HasMore;

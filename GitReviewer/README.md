@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.0.2** uses native model-driven Git tools and requires a
+Version **2.1.0** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -49,7 +49,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.0.2-win-x64.exe
+dist\GitReviewer-2.1.0-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -203,7 +203,18 @@ sequentially, even though parallel tool calls are disabled in requests.
 | `git_history` | Up to 20 ancestors and parents per call, starting from an allowed SHA |
 | `git_changed_files` | Paginated names/status against the target's first parent |
 | `git_diff` | Paginated full target patch, root commits compared with the empty tree |
-| `git_file` | Paginated committed blob at an exact relative path and allowed SHA |
+| `git_file` | Paginated committed blob, optionally an inclusive numbered `start_line`/`end_line` range |
+| `git_tree` | Paginated recursive file listing with modes and object IDs at an allowed SHA |
+| `git_search` | Paginated case-sensitive literal `query` matches with paths and line numbers; skips binary files |
+
+Line ranges use 1-based inclusive bounds, at most 500 lines per range, and require
+both bounds. They support text blobs up to the remaining 512,000-character snapshot
+budget; larger blobs can still be read with ordinary paginated `git_file`.
+An end line past EOF is clipped; a start line past EOF is rejected. Search queries
+are literal text, not regular expressions or Git flags. No matches is a successful
+empty result. Tree/search output and numbered ranges are cached for stable paging
+and share the session snapshot budget with diffs. Keep the same query/range when
+following `next_offset`.
 
 Refs such as `HEAD`, arbitrary revision expressions, paths outside the Git tree,
 and user-supplied Git flags are not accepted by tools. Only the target, its parents,
