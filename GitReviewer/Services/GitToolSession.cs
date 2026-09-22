@@ -11,6 +11,7 @@ public sealed class GitToolSession
     private readonly HashSet<string> _commits = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _nextOffsets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<int>> _readOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _snapshots = new(StringComparer.Ordinal);
     private readonly string? _parent;
     public string Sha { get; }
@@ -152,8 +153,10 @@ public sealed class GitToolSession
             endLine is < 1 or > 2_000_000 || endLine < startLine || endLine - startLine >= 500)
             throw new ArgumentException("Provide both start_line and end_line as an inclusive range of 1 to 500 lines.");
         var key = JsonSerializer.Serialize(new { name, commit, path, query, startLine, endLine });
-        if (offset != _nextOffsets.GetValueOrDefault(key))
-            throw new ArgumentException("Read each resource sequentially from offset 0 using its next_offset.");
+        var replay = _readOffsets.TryGetValue(key, out var readOffsets) && readOffsets.Contains(offset);
+        var expectedOffset = _nextOffsets.GetValueOrDefault(key);
+        if (!replay && offset != expectedOffset)
+            throw new ArgumentException($"Offset {offset} has not been read. Expected offset: {expectedOffset}. Use that offset to continue, or repeat a previously returned page offset (including 0). Do not skip unread content.");
         var command = name switch
         {
             "git_metadata" => new[] { "cat-file", "commit", commit },
@@ -208,10 +211,20 @@ public sealed class GitToolSession
                 if (id.Length == 40 && id.All(Uri.IsHexDigit) && _commits.Count < 1024) _commits.Add(id);
         }
         var next = offset + result.Output.Length;
-        if (name is not ("git_metadata" or "git_history")) _nextOffsets[key] = next;
-        if (result.HasMore) _pending.Add(key);
-        else _pending.Remove(key);
-        if (name == "git_diff") DiffComplete = !result.HasMore;
+        // Re-reading a page must not rewind progress or reopen a completed resource.
+        if (!replay)
+        {
+            if (name is not ("git_metadata" or "git_history"))
+            {
+                _nextOffsets[key] = next;
+                if (!_readOffsets.TryGetValue(key, out readOffsets))
+                    _readOffsets[key] = readOffsets = [];
+                readOffsets.Add(offset);
+            }
+            if (result.HasMore) _pending.Add(key);
+            else _pending.Remove(key);
+            if (name == "git_diff") DiffComplete = !result.HasMore;
+        }
         return JsonSerializer.Serialize(new { status = "ok", reviewed_sha = Sha, commit, offset,
             next_offset = result.HasMore ? (int?)next : null, content = result.Output });
     }

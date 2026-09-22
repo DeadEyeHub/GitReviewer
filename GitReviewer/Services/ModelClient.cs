@@ -90,6 +90,7 @@ public sealed class ModelClient
             Mandatory review protocol (takes precedence over custom review preferences):
             Independently inspect the immutable reviewed SHA using native Git tools. No diff is supplied automatically.
             Read git_diff from offset 0 through every next_offset until null before concluding. Finish every paged resource.
+            Previously read page offsets may be requested again, including offset 0 after EOF. Re-reading does not reset progress.
             Use git_tree to discover committed paths and git_search for literal text matches across committed text files.
             git_file optionally accepts inclusive start_line/end_line (1-based, up to 500 lines) and returns numbered lines.
             Range reads support blobs up to 512000 characters; use ordinary paged git_file for larger files.
@@ -191,7 +192,10 @@ public sealed class ModelClient
                         catch (Exception exception) when (exception is ArgumentException or JsonException or InvalidOperationException or FormatException or OverflowException)
                         {
                             unresolvedErrors.Add(safeName);
-                            result = "{\"status\":\"error\",\"message\":\"Invalid arguments or unsupported tool. Use the advertised schema, allowed SHAs, exact paths and expected offsets; retry within budget.\"}";
+                            var reason = exception is ArgumentException
+                                ? exception.Message
+                                : "Invalid JSON argument type or value. Follow the advertised tool schema.";
+                            result = JsonSerializer.Serialize(new { status = "error", message = reason });
                             log?.Invoke($"Git tool {callNumber}: {safeName} rejected");
                             activity?.Invoke(ReviewStage.ToolRejected, safeName);
                         }

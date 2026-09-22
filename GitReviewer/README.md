@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.1** uses native model-driven Git tools and requires a
+Version **2.1.2** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -49,7 +49,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.1-win-x64.exe
+dist\GitReviewer-2.1.2-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -248,6 +248,9 @@ concurrent local attacker replacing repository metadata or the Git executable.
 Every page is capped at 16,000 UTF-16 characters, with `offset` and `next_offset`
 (`null` at EOF). Every paged resource must start at offset zero, then use exactly
 its expected next offset; skipping unread content or seeking past EOF is rejected.
+Previously read page offsets can be requested again, including offset zero after
+EOF. Re-reading does not rewind progress or reopen a completed resource. Invalid
+offset errors report the expected continuation offset to the model.
 Output limits are enforced while draining the subprocess, including very long
 lines, rather than truncating an unbounded captured string.
 
