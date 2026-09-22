@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.0** uses native model-driven Git tools and requires a
+Version **2.1.1** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -49,7 +49,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.0-win-x64.exe
+dist\GitReviewer-2.1.1-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -206,6 +206,15 @@ sequentially, even though parallel tool calls are disabled in requests.
 | `git_file` | Paginated committed blob, optionally an inclusive numbered `start_line`/`end_line` range |
 | `git_tree` | Paginated recursive file listing with modes and object IDs at an allowed SHA |
 | `git_search` | Paginated case-sensitive literal `query` matches with paths and line numbers; skips binary files |
+
+Once tool reads are complete, a malformed final report gets up to two formatting
+correction requests within the existing round/time budgets. Feedback identifies
+invalid fields, missing markers and extra prose; the model must preserve its
+findings and return the required plain-text blocks. Each rejected answer is saved
+verbatim in a JSON diagnostic under `diagnostics/` in the application data folder,
+with the reviewed SHA, model, attempt number and validation errors. If correction
+fails, the error includes the diagnostic path and the review cursor is not advanced.
+Truncated responses and unfinished tool reads cannot be accepted through this retry.
 
 Line ranges use 1-based inclusive bounds, at most 500 lines per range, and require
 both bounds. They support text blobs up to the remaining 512,000-character snapshot

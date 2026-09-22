@@ -114,6 +114,7 @@ public sealed class ModelClient
             new { role = "user", content = JsonSerializer.Serialize(new { reviewed_sha = tools.Sha, branch_context = branch }) }
         };
         var calls = 0;
+        var formatRetries = 0;
         var output = 0;
         var unresolvedErrors = new HashSet<string>();
         log?.Invoke("Git agent: started");
@@ -209,14 +210,39 @@ public sealed class ModelClient
                     continue;
                 }
                 if (finish != "stop") throw new InvalidDataException("Model final response is incomplete; review not saved.");
-                var content = message.GetProperty("content").GetString()?.Trim() ?? "";
+                var originalContent = message.GetProperty("content").GetString() ?? "";
+                var content = originalContent.Trim();
                 if (!tools.ReadyForFinal || unresolvedErrors.Count > 0)
                 {
                     messages.Add(new { role = "assistant", content });
                     messages.Add(new { role = "user", content = "Review incomplete. Use native Git tools, read the full git_diff and finish all next_offset pages; correct tool errors before returning the report. Providers must support native tool_calls (vLLM: auto tool choice and a model-specific tool-call parser)." });
                     continue;
                 }
-                ValidateFinalReport(content);
+                var formatErrors = GetReportFormatErrors(content);
+                if (formatErrors.Count > 0)
+                {
+                    var diagnosticDirectory = Path.Combine(AppPaths.DataDirectory, "diagnostics");
+                    Directory.CreateDirectory(diagnosticDirectory);
+                    var diagnosticPath = Path.Combine(diagnosticDirectory, $"invalid-report-{tools.Sha}-{Guid.NewGuid():N}.json");
+                    await File.WriteAllTextAsync(diagnosticPath, JsonSerializer.Serialize(new
+                    {
+                        reviewed_sha = tools.Sha, model = profile.Model, attempt = formatRetries + 1,
+                        errors = formatErrors, content = originalContent
+                    }, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
+                    var reason = string.Join(" ", formatErrors);
+                    log?.Invoke($"Report format rejected: {reason} Original response saved: {diagnosticPath}");
+                    if (formatRetries >= 2 || round == 31)
+                        throw new InvalidDataException($"Invalid report format: {reason} No correction attempts remain. Review not saved. Diagnostic: {diagnosticPath}");
+                    formatRetries++;
+                    messages.Add(new { role = "assistant", content = originalContent });
+                    messages.Add(new { role = "user", content =
+                        $"Report format correction {formatRetries}/2. {reason}\n" +
+                        "Reformat the findings you already established; do not discard a finding to satisfy the format. " +
+                        "Return only NO_BUGS if no bugs were found, otherwise six-line blocks exactly as follows, without introduction, conclusion or Markdown fences:\n" +
+                        "BUG\nFILE: repository-relative path\nLINE: positive integer\nSIDE: NEW\nDESCRIPTION: bug and conditions on ONE line\nEND\n" +
+                        "SIDE must be NEW, OLD or HUNK (not right/left). Separate multiple blocks with optional blank lines." });
+                    continue;
+                }
                 log?.Invoke("Git agent: completed");
                 return content;
             }
@@ -231,17 +257,32 @@ public sealed class ModelClient
         catch { log?.Invoke("Git agent: failed"); throw; }
     }
 
-    private static void ValidateFinalReport(string content)
+    private static List<string> GetReportFormatErrors(string content)
     {
-        if (content == "NO_BUGS") return;
+        var errors = new List<string>();
+        if (content == "NO_BUGS") return errors;
         var lines = content.Replace("\r\n", "\n").Split('\n').Where(line => !string.IsNullOrWhiteSpace(line)).Select(line => line.Trim()).ToArray();
-        if (lines.Length == 0 || lines.Length % 6 != 0) throw new InvalidDataException("Incomplete BUG/NO_BUGS report.");
-        for (var i = 0; i < lines.Length; i += 6)
-            if (lines[i] != "BUG" || !lines[i + 1].StartsWith("FILE: ") || lines[i + 1].Length <= 6 ||
-                !lines[i + 2].StartsWith("LINE: ") || !int.TryParse(lines[i + 2][6..], out var line) || line <= 0 ||
-                lines[i + 3] is not ("SIDE: NEW" or "SIDE: OLD" or "SIDE: HUNK") ||
-                !lines[i + 4].StartsWith("DESCRIPTION: ") || lines[i + 4].Length <= 13 || lines[i + 5] != "END")
-                throw new InvalidDataException("Incomplete BUG/NO_BUGS report.");
+        if (lines.Length == 0) errors.Add("The report is empty.");
+        for (var i = 0; i < lines.Length;)
+        {
+            if (lines[i] != "BUG")
+            {
+                errors.Add("Unexpected text outside a BUG block; remove prose, Markdown fences and standalone markers.");
+                i++;
+                continue;
+            }
+            var end = i + 1;
+            while (end < lines.Length && lines[end] != "END" && lines[end] != "BUG") end++;
+            if (end == lines.Length || lines[end] != "END") errors.Add("A BUG block is missing END.");
+            var fields = lines[(i + 1)..end];
+            if (fields.Length != 4) errors.Add("Each BUG block requires exactly FILE, LINE, SIDE, DESCRIPTION in that order; DESCRIPTION must occupy one line.");
+            if (fields.Length < 1 || !fields[0].StartsWith("FILE: ") || fields[0].Length <= 6) errors.Add("FILE must contain a nonempty repository-relative path after 'FILE: '.");
+            if (fields.Length < 2 || !fields[1].StartsWith("LINE: ") || !int.TryParse(fields[1][6..], out var line) || line <= 0) errors.Add("LINE must contain a positive integer after 'LINE: '.");
+            if (fields.Length < 3 || fields[2] is not ("SIDE: NEW" or "SIDE: OLD" or "SIDE: HUNK")) errors.Add("SIDE must be exactly NEW, OLD or HUNK; right/left are not accepted.");
+            if (fields.Length < 4 || !fields[3].StartsWith("DESCRIPTION: ") || fields[3].Length <= 13) errors.Add("DESCRIPTION must contain a nonempty one-line explanation after 'DESCRIPTION: '.");
+            i = end < lines.Length && lines[end] == "END" ? end + 1 : end;
+        }
+        return errors.Distinct().ToList();
     }
 
     private async Task<string> SendAsync(
