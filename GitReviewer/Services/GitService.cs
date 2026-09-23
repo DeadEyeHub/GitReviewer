@@ -109,7 +109,8 @@ public sealed class GitService
     public async Task<GitResult> FetchAsync(
         string repositoryPath,
         AppSettings settings,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<string>? activity = null)
     {
         var identity = await GetRepositoryIdentityAsync(repositoryPath, cancellationToken);
         var branch = await ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
@@ -117,8 +118,18 @@ public sealed class GitService
         // Local-only repositories are valid review targets. Treat fetch as a no-op
         // when the selected branch has no upstream instead of making a remote mandatory.
         if (remote is null)
+        {
+            activity?.Invoke(Localization.Format("Fetch skipped: {0} has no upstream.", "Fetch пропущен: у {0} нет upstream.", branch));
             return new GitResult(0, string.Empty, string.Empty);
+        }
         var resolvedRemote = remote.Value;
+        if (resolvedRemote.Name == ".")
+        {
+            activity?.Invoke(Localization.Text("Fetch skipped: upstream is in this local repository.", "Fetch пропущен: upstream находится в этом локальном репозитории."));
+            return new GitResult(0, string.Empty, string.Empty);
+        }
+        var before = await GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+        activity?.Invoke(Localization.Text("Waiting for shared repository fetch lock.", "Ожидание доступа к общему Git-хранилищу для fetch."));
         var fetchLock = FetchLocks.GetOrAdd(identity.CommonGitDirectory, _ => new SemaphoreSlim(1, 1));
         await fetchLock.WaitAsync(cancellationToken);
         try
@@ -127,14 +138,25 @@ public sealed class GitService
                 ValidateRemoteForAuthenticationMode(resolvedRemote.Url, settings.GitAuthenticationMode);
             // All linked worktrees use the common object store. Serializing fetches by
             // git-common-dir avoids competing ref/object updates while Git reuses objects.
-            if (resolvedRemote.Name == ".")
-                return new GitResult(0, string.Empty, string.Empty);
+            activity?.Invoke(Localization.Format("Fetching {0} from remote {1}.", "Fetch: получение {0} из remote {1}.", resolvedRemote.MergeReference, resolvedRemote.Name));
+            GitResult result;
             if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-                return await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+                result = await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
                     "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
-            return await RunWithAuthenticationAsync(
-                repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
-                "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
+            else
+                result = await RunWithAuthenticationAsync(
+                    repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+                    "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
+            if (result.ExitCode == 0)
+            {
+                var after = await GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+                activity?.Invoke(before == after
+                    ? Localization.Format("Fetch completed: {0} unchanged at {1}.", "Fetch выполнен: {0} без изменений, {1}.", branch, after[..8])
+                    : Localization.Format("Fetch completed: {0}, {1} → {2}.", "Fetch выполнен: {0}, {1} → {2}.", branch, before[..8], after[..8]));
+                if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+                    activity?.Invoke(Localization.Text("Fetched into FETCH_HEAD. Local branch and working files are unchanged; select refs/remotes/... to review remote updates.", "Данные получены в FETCH_HEAD. Локальная ветка и рабочие файлы не изменены; для проверки удалённых обновлений выберите refs/remotes/...."));
+            }
+            return result;
         }
         finally
         {

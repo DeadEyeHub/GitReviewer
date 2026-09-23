@@ -215,7 +215,9 @@ public sealed class ReviewRunner
                 SshPrivateKeyPath = settings.SshPrivateKeyPath,
                 PlinkPath = settings.PlinkPath
             };
-            var fetch = await _git.FetchAsync(repositoryPath, fetchSettings, cancellationToken);
+            var fetch = await _git.FetchAsync(repositoryPath, fetchSettings, cancellationToken,
+                message => Publish(Log, message));
+            Publish(ModelLog, $"Git fetch exit code: {fetch.ExitCode}\nstdout: {fetch.Output}\nstderr: {fetch.Error}");
             if (fetch.ExitCode != 0)
             {
                 var details = string.IsNullOrWhiteSpace(fetch.Error) ? fetch.Output : fetch.Error;
@@ -227,7 +229,6 @@ public sealed class ReviewRunner
                     fetch.ExitCode,
                     details.Trim()));
             }
-            Log?.Invoke(Localization.Text("Git fetch completed.", "Git fetch выполнен."));
         }
 
         if (position.PendingStart is not null)
@@ -259,7 +260,10 @@ public sealed class ReviewRunner
 
         var head = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
         if (head.Equals(previousCommit, StringComparison.Ordinal))
+        {
+            Publish(Log, Localization.Format("No new commits on {0}; tip {1}.", "Новых коммитов в {0} нет; вершина {1}.", branch, Short(head)));
             return;
+        }
 
         if (!await _git.IsAncestorAsync(repositoryPath, previousCommit, head, cancellationToken))
             throw new GitException(Localization.Text(
@@ -267,6 +271,7 @@ public sealed class ReviewRunner
                 "История изменена: сохраненный коммит не является предком вершины выбранной ветки."));
 
         var commits = await _git.GetCommitsAfterAsync(repositoryPath, previousCommit, head, cancellationToken);
+        Publish(Log, Localization.Format("Found {0} new commits on {1}.", "Найдено новых коммитов: {0}, ветка {1}.", commits.Count, branch));
         foreach (var sha in commits)
             await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
                 branch, sha, profile, cancellationToken);
