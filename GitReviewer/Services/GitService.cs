@@ -343,12 +343,21 @@ public sealed class GitService
         CancellationToken token, Action<GitCommandTrace>? trace, params string[] arguments) =>
         RunCoreAsync(repositoryPath, null, token, (offset, limit), trace, arguments);
 
+    internal static Task<GitResult> CaptureSnapshotAsync(string repositoryPath, Stream destination, int characterLimit,
+        CancellationToken token, Action<GitCommandTrace>? trace, params string[] arguments) =>
+        RunCoreAsync(repositoryPath, null, token, (0, characterLimit), trace, destination, arguments);
+
+    private static Task<GitResult> RunCoreAsync(string repositoryPath, AppSettings? settings,
+        CancellationToken token, (int Offset, int Limit)? page, Action<GitCommandTrace>? trace, params string[] arguments) =>
+        RunCoreAsync(repositoryPath, settings, token, page, trace, null, arguments);
+
     private static async Task<GitResult> RunCoreAsync(
         string repositoryPath,
         AppSettings? settings,
         CancellationToken cancellationToken,
         (int Offset, int Limit)? page,
         Action<GitCommandTrace>? trace,
+        Stream? snapshotDestination,
         params string[] arguments)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -508,7 +517,37 @@ public sealed class GitService
                     throw;
                 }
             }
-            var outputTask = isFetch ? ReadTransferAsync(process.StandardOutput, false)
+            async Task<string> CaptureAsync()
+            {
+                try
+                {
+                    var buffer = new char[4096];
+                    var bytes = new byte[buffer.Length * 2];
+                    var remaining = page!.Value.Limit;
+                    while (true)
+                    {
+                        var count = await process.StandardOutput.ReadAsync(buffer.AsMemory(), token);
+                        if (count == 0) break;
+                        var accepted = Math.Min(count, remaining);
+                        Buffer.BlockCopy(buffer, 0, bytes, 0, accepted * 2);
+                        await snapshotDestination!.WriteAsync(bytes.AsMemory(0, accepted * 2), token);
+                        remaining -= accepted;
+                        if (accepted != count)
+                        {
+                            more = true;
+                            if (!process.HasExited) process.Kill(true);
+                            break;
+                        }
+                    }
+                    return $"[Disk snapshot: {snapshotDestination!.Length} bytes; truncated={more}]";
+                }
+                catch
+                {
+                    if (!process.HasExited) process.Kill(true);
+                    throw;
+                }
+            }
+            var outputTask = snapshotDestination is not null ? CaptureAsync() : isFetch ? ReadTransferAsync(process.StandardOutput, false)
                 : ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
             var errorTask = isFetch ? ReadTransferAsync(process.StandardError, true)
                 : ReadBoundedAsync(process.StandardError, 0, 16_000, false);

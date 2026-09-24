@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.9** uses native model-driven Git tools and requires a
+Version **2.1.10** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -57,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.9-win-x64.exe
+dist\GitReviewer-2.1.10-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -221,8 +221,8 @@ sequentially, even though parallel tool calls are disabled in requests.
 | `git_changed_files` | Paginated names/status against the target's first parent |
 | `git_diff` | Paginated full target patch, root commits compared with the empty tree |
 | `git_file` | Paginated committed blob, optionally an inclusive numbered `start_line`/`end_line` range |
-| `git_tree` | Paginated recursive file listing with modes and object IDs at an allowed SHA |
-| `git_search` | Paginated case-sensitive literal `query` matches with paths and line numbers; skips binary files |
+| `git_tree` | Paginated directory children at an allowed SHA; optional directory `path` and `recursive` (default false) |
+| `git_search` | Paginated case-sensitive literal `query` matches; optional file/directory `path`; skips binary files |
 
 Once tool reads are complete, a malformed final report gets up to two formatting
 correction requests within the existing round/time budgets. Feedback identifies
@@ -234,12 +234,12 @@ fails, the error includes the diagnostic path and the review cursor is not advan
 Truncated responses and unfinished tool reads cannot be accepted through this retry.
 
 Line ranges use 1-based inclusive bounds, at most 500 lines per range, and require
-both bounds. They support text blobs up to the remaining 512,000-character snapshot
-budget; larger blobs can still be read with ordinary paginated `git_file`.
+both bounds. Range conversion supports text blobs up to 512,000 characters;
+larger blobs return a recoverable suggestion to use ordinary paginated `git_file`.
 An end line past EOF is clipped; a start line past EOF is rejected. Search queries
 are literal text, not regular expressions or Git flags. No matches is a successful
 empty result. Tree/search output and numbered ranges are cached for stable paging
-and share the session snapshot budget with diffs. Keep the same query/range when
+on disk and share the session disk budget with diffs. Keep the same path/query/range when
 following `next_offset`.
 
 Refs such as `HEAD`, arbitrary revision expressions, paths outside the Git tree,
@@ -271,17 +271,28 @@ offset errors report the expected continuation offset to the model.
 Output limits are enforced while draining the subprocess, including very long
 lines, rather than truncating an unbounded captured string.
 
-On the model's first request for `git_diff` or `git_changed_files`, that command's
-complete rendered output is captured once in a bounded in-memory snapshot. The
-two snapshots share a 512,000-character storage cap; oversized or failed captures
-abort the review instead of exposing a partial snapshot. Later pages use only the
+On the model's first request for diff, changed files, tree, search or a numbered
+file range, the command output is streamed once into a temporary disk snapshot.
+Snapshots share a **64 MiB per-session disk budget**, not a 512,000-character cap.
+Set the environment variable `GITREVIEWER_SNAPSHOT_MB` to an integer from 1 to 1024
+before launching the application to change this budget; invalid values use 64 MiB.
+For example, in PowerShell: `$env:GITREVIEWER_SNAPSHOT_MB = '128'` before starting
+the EXE from that shell. Storage uses two bytes per UTF-16 character. Temporary
+files have delete-on-close handles; they are closed on completion, error or cancellation.
+Failed/oversized captures are immediately discarded, never exposed as valid partial snapshots.
+Auxiliary size limits return a recoverable tool result suggesting a narrower path,
+query or range; they do not prevent a final report by themselves. A diff that
+exceeds the disk budget still fails the review because full diff coverage is required.
+Later pages use only the
 snapshot, so changes to live attributes or rendering configuration cannot alter
 or shorten the remaining pages. Rendering reflects local attributes/configuration
 at capture time, not necessarily the attributes committed at the target SHA.
 No diff is captured or supplied automatically by the runner. Committed blob pages
-rerun the read-only object read, with offsets limited to 2,000,000 characters.
-The model must consume the entire diff in order and finish every opened paged
-resource before a final report can be accepted. Binary diff markers are visible,
+rerun the read-only object read. Offsets are nonnegative 32-bit character positions.
+The model must consume the entire diff in order before a final report can be accepted.
+Auxiliary tree/search/file/changed-file pages can be stopped after obtaining enough
+relevant context. Tree browsing defaults to immediate children; scope requests by
+directory rather than enumerating the entire repository. Binary diff markers are visible,
 but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
 with replacement for invalid bytes, not a binary download API.
 
@@ -294,11 +305,13 @@ error results for correction within the same budgets. Once arguments are valid,
 a Git retrieval failure (including a nonexistent path or unavailable blob) is
 fatal: reading an unrelated resource cannot clear a missing-context failure.
 Malformed response
-envelopes, unrecovered errors, output/budget exhaustion, unfinished pages,
+envelopes, unrecovered argument errors, model-output/budget exhaustion, unfinished diff pages,
 non-`stop` final responses, or incomplete report blocks fail the review. No report,
 cursor advancement, or completion notification is produced for those failures.
 Large commits may therefore require a different workflow instead of being
-silently reviewed only in part. Limits are fixed, not inferred from model metadata.
+silently reviewed only in part. The model-output budget is separate from snapshot
+storage: increasing disk capacity does not increase model context or the 512,000
+serialized tool-result character budget. Model budgets are fixed, not inferred from model metadata.
 
 Empty changes are detected locally and reported honestly as not sent to the model.
 Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.

@@ -3,20 +3,29 @@ using System.Text.Json;
 namespace GitReviewer.Services;
 
 // Only this dispatcher translates model arguments into Git arguments. No revision expressions or disk reads.
-public sealed class GitToolSession
+public sealed class GitToolSession : IDisposable
 {
     public const int PageSize = 16_000;
-    public const int SnapshotLimit = 512_000;
+    private const int RangeInputLimit = 512_000;
     private readonly string _repository;
     private readonly HashSet<string> _commits = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _nextOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<int>> _readOffsets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, string> _snapshots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, FileStream> _snapshots = new(StringComparer.Ordinal);
+    private readonly long _diskLimit = ReadDiskLimit();
+    private bool _disposed;
+    private static long ReadDiskLimit() => int.TryParse(Environment.GetEnvironmentVariable("GITREVIEWER_SNAPSHOT_MB"), out var mb)
+        && mb is >= 1 and <= 1024 ? mb * 1024L * 1024 : 64 * 1024L * 1024;
+    public void Dispose()
+    {
+        foreach (var snapshot in _snapshots.Values) snapshot.Dispose();
+        _snapshots.Clear();
+        _disposed = true;
+    }
     private readonly string? _parent;
     public string Sha { get; }
     public bool DiffComplete { get; private set; }
-    public bool ReadyForFinal => DiffComplete && _pending.Count == 0;
+    public bool ReadyForFinal => DiffComplete;
 
     private GitToolSession(string repository, string sha, string? parent)
     {
@@ -74,7 +83,17 @@ public sealed class GitToolSession
             ["commit"] = new { type = "string", description = "Discovered full SHA; defaults to reviewed SHA." }
         };
         if (name is not ("git_metadata" or "git_history"))
-            properties["offset"] = new { type = "integer", minimum = 0, maximum = 2_000_000, description = "Initially 0; follow next_offset with the same arguments." };
+            properties["offset"] = new { type = "integer", minimum = 0, maximum = int.MaxValue, description = "Initially 0; follow next_offset with the same arguments." };
+        if (name is "git_tree" or "git_search")
+            properties["path"] = new
+            {
+                type = "string",
+                description = name == "git_tree"
+                ? "Optional exact repository-relative directory without trailing slash. Omit for repository root."
+                : "Optional exact repository-relative directory or file to restrict results. Omit for repository root."
+            };
+        if (name == "git_tree")
+            properties["recursive"] = new { type = "boolean", description = "Default false: list immediate children of path. True lists all descendants; prefer scoped directories." };
         if (name == "git_file")
         {
             properties["path"] = new { type = "string", description = "Exact repository-relative file path." };
@@ -95,11 +114,11 @@ public sealed class GitToolSession
             {
                 "git_metadata" => "Commit metadata and parents. commit defaults to reviewed SHA; only discovered full SHAs allowed.",
                 "git_history" => "Discover up to 20 ancestors and their parents from an allowed commit. Bounded local history only.",
-                "git_changed_files" => "Page changed file names/status for reviewed SHA against first parent (root against empty tree). Start offset=0 and follow next_offset until null.",
+                "git_changed_files" => "Page changed file names/status for reviewed SHA against first parent (root against empty tree). Start offset=0; auxiliary pages are optional.",
                 "git_diff" => "Read the reviewed commit patch, including binary/mode changes. Start offset=0 and follow next_offset until null before final report.",
-                "git_tree" => "List all committed files recursively, including modes and object IDs. Follow every next_offset until null.",
-                "git_search" => "Search literal text in an allowed commit. Returns matching paths, line numbers and lines; binary files are skipped. Follow every next_offset until null. No matches is a successful empty result.",
-                _ => "Page committed blob content at path and allowed commit, never working files. Start offset=0 and follow next_offset until null. Symlinks return link text, not their target."
+                "git_tree" => "Browse committed directory children, optionally recursive and scoped by path. Auxiliary pages need not all be read.",
+                "git_search" => "Search literal text in an allowed commit, optionally scoped by path. Returns paths, line numbers and lines; binary files are skipped. Auxiliary pages need not all be read. No matches is a successful empty result.",
+                _ => "Page committed blob content at path and allowed commit, never working files. Start offset=0; follow next_offset as needed. Symlinks return link text, not their target."
             },
             parameters = new
             {
@@ -120,6 +139,7 @@ public sealed class GitToolSession
         CancellationToken token,
         Action<GitCommandTrace>? trace)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         token.ThrowIfCancellationRequested();
         if (!Names.Contains(name)) throw new ArgumentException("Unsupported tool. Use an advertised Git tool.");
         if (arguments.Length > 4096) throw new ArgumentException("Arguments exceed 4096 characters.");
@@ -133,12 +153,12 @@ public sealed class GitToolSession
         var commit = args.TryGetProperty("commit", out var c) ? c.GetString() : Sha;
         if (commit is null || !_commits.Contains(commit)) throw new ArgumentException("Use the reviewed SHA or a full SHA returned by metadata/history.");
         var offset = args.TryGetProperty("offset", out var o) ? o.GetInt32() : 0;
-        if (offset is < 0 or > 2_000_000) throw new ArgumentException("Offset outside supported bounds.");
+        if (offset < 0) throw new ArgumentException("Offset outside supported bounds.");
         var path = args.TryGetProperty("path", out var p) ? p.GetString() : null;
-        if (name != "git_file" && path is not null) throw new ArgumentException("path is only supported by git_file.");
+        var recursive = args.TryGetProperty("recursive", out var r) && r.GetBoolean();
         if (name is "git_diff" or "git_changed_files" && commit != Sha)
             throw new ArgumentException("Changes are bound to the reviewed SHA.");
-        if (name == "git_file" && (string.IsNullOrEmpty(path) || path.Length > 2048 ||
+        if ((name == "git_file" || path is not null) && (string.IsNullOrEmpty(path) || path.Length > 2048 ||
             path.Contains('\\') || path.Contains(':') || path.Any(char.IsControl) ||
             path.Split('/').Any(part => part is "" or "." or "..")))
             throw new ArgumentException("Use an exact relative Git path without traversal or revision syntax.");
@@ -152,7 +172,7 @@ public sealed class GitToolSession
         if (startLine.HasValue != endLine.HasValue || startLine is < 1 or > 2_000_000 ||
             endLine is < 1 or > 2_000_000 || endLine < startLine || endLine - startLine >= 500)
             throw new ArgumentException("Provide both start_line and end_line as an inclusive range of 1 to 500 lines.");
-        var key = JsonSerializer.Serialize(new { name, commit, path, query, startLine, endLine });
+        var key = JsonSerializer.Serialize(new { name, commit, path, query, startLine, endLine, recursive });
         var replay = _readOffsets.TryGetValue(key, out var readOffsets) && readOffsets.Contains(offset);
         var expectedOffset = _nextOffsets.GetValueOrDefault(key);
         if (!replay && offset != expectedOffset)
@@ -163,8 +183,10 @@ public sealed class GitToolSession
             "git_history" => new[] { "log", "--no-show-signature", "--format=%H %P", "-n", "20", commit, "--" },
             "git_changed_files" => DiffArguments(true),
             "git_diff" => DiffArguments(false),
-            "git_tree" => new[] { "ls-tree", "-r", "--full-tree", commit, "--" },
-            "git_search" => new[] { "grep", "--no-color", "--no-ext-grep", "--no-textconv", "-I", "-n", "-F", "-e", query!, commit, "--" },
+            "git_tree" => (recursive ? new[] { "ls-tree", "-r", "--full-tree", commit, "--" } : new[] { "ls-tree", "--full-tree", commit, "--" })
+                .Concat(path is null ? Array.Empty<string>() : new[] { path + "/" }).ToArray(),
+            "git_search" => new[] { "grep", "--no-color", "--no-ext-grep", "--no-textconv", "-I", "-n", "-F", "-e", query!, commit, "--" }
+                .Concat(path is null ? Array.Empty<string>() : new[] { path }).ToArray(),
             _ => new[] { "cat-file", "blob", commit + ":" + path }
         };
         GitResult result;
@@ -173,28 +195,47 @@ public sealed class GitToolSession
             if (!_snapshots.TryGetValue(key, out var snapshot))
             {
                 // Render once: live attributes/config must not alter or shorten later pages.
-                var captured = await GitService.ReadPageAsync(_repository, 0,
-                    SnapshotLimit - _snapshots.Values.Sum(value => value.Length), token, trace, command);
-                if ((captured.ExitCode != 0 && !(name == "git_search" && captured.ExitCode == 1 && captured.Output.Length == 0)) || captured.HasMore)
-                    throw new GitException("Git snapshot unavailable or exceeds the 512000-character session limit; review is incomplete.");
-                snapshot = captured.Output;
-                if (startLine.HasValue)
+                snapshot = new FileStream(Path.Combine(Path.GetTempPath(), "GitReviewer-snapshot-" + Guid.NewGuid().ToString("N")),
+                    FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
+                try
                 {
-                    if (snapshot.Contains('\0')) throw new GitException("Line ranges require a text blob.");
-                    var lines = snapshot.Split('\n');
-                    var lineCount = snapshot.Length == 0 ? 0 : lines.Length - (snapshot.EndsWith('\n') ? 1 : 0);
-                    if (startLine.Value > lineCount) throw new ArgumentException("start_line is beyond the end of the file.");
-                    snapshot = string.Concat(Enumerable.Range(startLine.Value, Math.Min(endLine!.Value, lineCount) - startLine.Value + 1)
-                        .Select(line => $"{line}: {lines[line - 1].TrimEnd('\r')}\n"));
-                    if (snapshot.Length > SnapshotLimit - _snapshots.Values.Sum(value => value.Length))
-                        throw new GitException("Numbered range exceeds the session snapshot limit.");
+                    var available = _diskLimit - _snapshots.Values.Sum(value => value.Length);
+                    var captured = await GitService.CaptureSnapshotAsync(_repository, snapshot,
+                        (int)(available / 2), token, trace, command);
+                    if (captured.HasMore)
+                    {
+                        var reason = $"Snapshot disk budget exceeded ({_diskLimit} bytes per session; {available} bytes available). Narrow path/query or request a smaller directory. Configure GITREVIEWER_SNAPSHOT_MB (1–1024, default 64) before restarting the application if needed.";
+                        if (name == "git_diff") throw new GitException(reason + " Full diff is required; review incomplete.");
+                        throw new GitToolQueryException(reason);
+                    }
+                    if (captured.ExitCode != 0 && !(name == "git_search" && captured.ExitCode == 1 && snapshot.Length == 0))
+                        throw new GitException("Git snapshot unavailable; review is incomplete. " + captured.Error);
+                    if (startLine.HasValue)
+                    {
+                        if (snapshot.Length > RangeInputLimit * 2L)
+                            throw new GitToolQueryException("Line-range input exceeds 512000 characters. Use ordinary paged git_file without start_line/end_line.");
+                        var source = ReadSnapshot(snapshot, 0, (int)(snapshot.Length / 2));
+                        if (source.Contains('\0')) throw new GitToolQueryException("Line ranges require a text blob. Use ordinary paged git_file.");
+                        var lines = source.Split('\n');
+                        var lineCount = source.Length == 0 ? 0 : lines.Length - (source.EndsWith('\n') ? 1 : 0);
+                        if (startLine.Value > lineCount) throw new ArgumentException("start_line is beyond the end of the file.");
+                        var numbered = string.Concat(Enumerable.Range(startLine.Value, Math.Min(endLine!.Value, lineCount) - startLine.Value + 1)
+                            .Select(line => $"{line}: {lines[line - 1].TrimEnd('\r')}\n"));
+                        if (numbered.Length * 2L > available) throw new GitToolQueryException("Numbered range exceeds snapshot disk budget. Request fewer lines.");
+                        snapshot.SetLength(0);
+                        snapshot.Position = 0;
+                        var bytes = System.Text.Encoding.Unicode.GetBytes(numbered);
+                        await snapshot.WriteAsync(bytes, token);
+                    }
+                    _snapshots.Add(key, snapshot);
                 }
-                _snapshots.Add(key, snapshot);
+                catch { snapshot.Dispose(); throw; }
             }
-            if (offset > snapshot.Length) throw new GitException("Snapshot ended before the requested offset; review is incomplete.");
-            var length = Math.Min(PageSize, snapshot.Length - offset);
-            if (length > 0 && offset + length < snapshot.Length && char.IsHighSurrogate(snapshot[offset + length - 1])) length--;
-            result = new GitResult(0, snapshot.Substring(offset, length), "", offset + length < snapshot.Length);
+            var characters = snapshot.Length / 2;
+            if (offset > characters) throw new GitException("Snapshot ended before the requested offset; review is incomplete.");
+            var content = ReadSnapshot(snapshot, offset, (int)Math.Min(PageSize, characters - offset));
+            if (content.Length > 0 && offset + content.Length < characters && char.IsHighSurrogate(content[^1])) content = content[..^1];
+            result = new GitResult(0, content, "", offset + content.Length < characters);
         }
         else
             result = await GitService.ReadPageAsync(_repository, offset, PageSize, token, trace, command);
@@ -221,11 +262,28 @@ public sealed class GitToolSession
                     _readOffsets[key] = readOffsets = [];
                 readOffsets.Add(offset);
             }
-            if (result.HasMore) _pending.Add(key);
-            else _pending.Remove(key);
             if (name == "git_diff") DiffComplete = !result.HasMore;
         }
-        return JsonSerializer.Serialize(new { status = "ok", reviewed_sha = Sha, commit, offset,
-            next_offset = result.HasMore ? (int?)next : null, content = result.Output });
+        return JsonSerializer.Serialize(new
+        {
+            status = "ok",
+            reviewed_sha = Sha,
+            commit,
+            offset,
+            next_offset = result.HasMore ? (int?)next : null,
+            content = result.Output
+        });
+    }
+
+    private static string ReadSnapshot(FileStream snapshot, int offset, int count)
+    {
+        snapshot.Position = offset * 2L;
+        var bytes = new byte[count * 2];
+        snapshot.ReadExactly(bytes);
+        var characters = new char[count];
+        Buffer.BlockCopy(bytes, 0, characters, 0, bytes.Length);
+        return new string(characters);
     }
 }
+
+public sealed class GitToolQueryException(string message) : Exception(message);

@@ -345,7 +345,7 @@ public sealed class ReviewRunner
 
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
         Emit(ReviewStage.PreparingDiff, profile, sha);
-        var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken);
+        using var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken);
         var result = new ReviewResult { EmptyDiff = await tools.IsEmptyAsync(cancellationToken) };
         if (!result.EmptyDiff)
         {
