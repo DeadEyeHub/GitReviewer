@@ -169,11 +169,11 @@ public sealed class GitService
             activity?.Invoke(Localization.Format("Fetching {0} from remote {1}.", "Fetch: получение {0} из remote {1}.", resolvedRemote.MergeReference, resolvedRemote.Name));
             GitResult result;
             if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-                result = await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+                result = await RunWithAuthenticationAsync(repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken,
                     "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
             else
                 result = await RunWithAuthenticationAsync(
-                    repositoryPath, settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+                    repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
                     "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
             if (result.ExitCode == 0)
             {
@@ -215,7 +215,7 @@ public sealed class GitService
         if (resolvedRemote.Url != ".")
             ValidateRemoteForAuthenticationMode(resolvedRemote.Url, settings.GitAuthenticationMode);
 
-        var result = await RunWithAuthenticationAsync(repositoryPath, settings, cancellationToken,
+        var result = await RunWithAuthenticationAsync(repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken,
             "ls-remote", "--exit-code", resolvedRemote.Name, resolvedRemote.MergeReference);
         if (result.ExitCode != 0)
             throw new GitException(result.Error.Length > 0
@@ -302,7 +302,7 @@ public sealed class GitService
 
     private async Task<GitResult> RunWithAuthenticationAsync(
         string repositoryPath,
-        AppSettings settings,
+        AppSettings? settings,
         CancellationToken cancellationToken,
         params string[] arguments)
         => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, PublishDiagnostic, arguments);
@@ -618,6 +618,7 @@ public sealed class GitService
 
     private static void ValidateRemoteForAuthenticationMode(string remoteUrl, string mode)
     {
+        if (IsLocalRemote(remoteUrl)) return;
         if (mode == "https" && !remoteUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             throw new GitException(Localization.Text(
                 "HTTPS authentication requires a selected remote URL that starts with https://.",
@@ -630,6 +631,19 @@ public sealed class GitService
             throw new GitException(Localization.Text(
                 "The upstream remote does not use a supported SSH URL.",
                 "Upstream remote не использует поддерживаемый SSH-адрес."));
+    }
+
+    internal static bool IsLocalRemote(string remoteUrl)
+    {
+        if (string.IsNullOrWhiteSpace(remoteUrl) || remoteUrl.Any(char.IsControl)) return false;
+        if (remoteUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            return Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri) && uri.IsFile;
+        if (remoteUrl.Contains("://", StringComparison.Ordinal) || remoteUrl.Contains("::", StringComparison.Ordinal)) return false;
+        if (OperatingSystem.IsWindows() && remoteUrl.Length >= 3 && char.IsAsciiLetter(remoteUrl[0]) &&
+            remoteUrl[1] == ':' && remoteUrl[2] is '/' or '\\') return true;
+        var colon = remoteUrl.IndexOf(':');
+        var slash = remoteUrl.IndexOfAny(['/', '\\']);
+        return colon < 0 || slash >= 0 && slash < colon;
     }
 
     private static bool IsSshRemote(string remoteUrl)
