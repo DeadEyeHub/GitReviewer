@@ -1071,8 +1071,7 @@ public partial class MainWindow : Window
     {
         if (_journal.Snapshot() is { } journal)
         {
-            LogTextBox.Text = journal;
-            LogTextBox.ScrollToEnd();
+            LogTextView.Update(LogTextBox, journal);
         }
         if (_logWindow is not null && _details.Snapshot() is { } details) _logWindow.SetText(details);
     }

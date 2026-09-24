@@ -24,7 +24,6 @@ public sealed class LogWindow : Window
 
     public void SetText(string text)
     {
-        _text.Text = text;
-        _text.ScrollToEnd();
+        LogTextView.Update(_text, text);
     }
 }
