@@ -82,6 +82,20 @@ public sealed class PersistentLog
         }
     }
 
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            // Remove the rotated history too, otherwise it returns on restart.
+            File.Delete(_path + ".1");
+            File.Delete(_path);
+            _tail.Clear();
+            _characters = 0;
+            Error = null;
+            _dirty = true;
+        }
+    }
+
     public string? Snapshot(bool force = false)
     {
         lock (_gate)

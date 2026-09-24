@@ -188,6 +188,7 @@ public partial class MainWindow : Window
         OpenLogButton.Content = Localization.Text("Log", "Лог");
         RefreshBranchesButton.Content = Localization.Text("Refresh", "Обновить");
         if (_logWindow is not null) _logWindow.Title = Localization.Text("Log", "Лог");
+        _logWindow?.ApplyLanguage();
         ProjectFolderLabel.Text = Localization.Text("Project folder", "Папка проекта");
         BrowseButton.Content = Localization.Text("Browse...", "Обзор...");
         IntervalLabel.Text = Localization.Text("Interval, seconds", "Интервал, секунд");
@@ -1125,6 +1126,18 @@ public partial class MainWindow : Window
         if (_logWindow is null)
         {
             _logWindow = new LogWindow { Owner = this, Title = Localization.Text("Log", "Лог") };
+            _logWindow.ClearRequested += () =>
+            {
+                try
+                {
+                    _details.Clear();
+                    _logWindow?.SetText(_details.Snapshot(true)!);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+                {
+                    ShowError(Localization.Text("Could not clear the log: ", "Не удалось очистить лог: ") + exception.Message);
+                }
+            };
             _logWindow.Closed += (_, _) => _logWindow = null;
         }
         _logWindow.SetText(_details.Snapshot(true)!);
