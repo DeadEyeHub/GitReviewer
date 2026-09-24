@@ -217,7 +217,7 @@ public sealed class ReviewRunner
             };
             var fetch = await _git.FetchAsync(repositoryPath, fetchSettings, cancellationToken,
                 message => Publish(Log, message));
-            Publish(ModelLog, $"Git fetch exit code: {fetch.ExitCode}\nstdout: {fetch.Output}\nstderr: {fetch.Error}");
+            Publish(ModelLog, GitService.SanitizeDiagnostic($"Git fetch exit code: {fetch.ExitCode}\nstdout: {fetch.Output}\nstderr: {fetch.Error}"));
             if (fetch.ExitCode != 0)
             {
                 var details = string.IsNullOrWhiteSpace(fetch.Error) ? fetch.Output : fetch.Error;
@@ -227,7 +227,7 @@ public sealed class ReviewRunner
                     "Git fetch failed with exit code {0}: {1}",
                     "Git fetch не выполнен, код завершения {0}: {1}",
                     fetch.ExitCode,
-                    details.Trim()));
+                    GitService.SanitizeDiagnostic(details.Trim())));
             }
         }
 

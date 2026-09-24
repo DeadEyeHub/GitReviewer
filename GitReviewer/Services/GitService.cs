@@ -7,6 +7,33 @@ namespace GitReviewer.Services;
 
 public sealed class GitService
 {
+    public event Action<string>? Diagnostic;
+
+    private void PublishDiagnostic(GitCommandTrace trace)
+        => WriteDiagnostic(System.Text.Json.JsonSerializer.Serialize(trace with
+        {
+            Arguments = trace.Arguments.Select(SanitizeDiagnostic).ToArray(),
+            Failure = trace.Failure is null ? null : SanitizeDiagnostic(trace.Failure),
+            Result = trace.Result is null ? null : trace.Result with
+            {
+                Output = SanitizeDiagnostic(trace.Result.Output),
+                Error = SanitizeDiagnostic(trace.Result.Error)
+            }
+        }));
+
+    private void WriteDiagnostic(string message)
+    {
+        var text = SanitizeDiagnostic(message);
+        if (Diagnostic is null) return;
+        foreach (Action<string> handler in Diagnostic.GetInvocationList())
+            try { handler("Git operation: " + text); } catch { }
+    }
+
+    internal static string SanitizeDiagnostic(string text) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            System.Text.RegularExpressions.Regex.Replace(text,
+                @"(?i)(https?://)[^\s/\""<>]*@", "$1[redacted]@"),
+            @"(?i)([?&](?:token|access_token|password|key|signature)=)[^\s&\""<>]*", "$1[redacted]");
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FetchLocks =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
@@ -123,6 +150,7 @@ public sealed class GitService
             return new GitResult(0, string.Empty, string.Empty);
         }
         var resolvedRemote = remote.Value;
+        WriteDiagnostic($"Fetch target: remote={resolvedRemote.Name}; url={resolvedRemote.Url}; ref={resolvedRemote.MergeReference}; branch={branch}; repository={repositoryPath}; auth={settings.GitAuthenticationMode}");
         if (resolvedRemote.Name == ".")
         {
             activity?.Invoke(Localization.Text("Fetch skipped: upstream is in this local repository.", "Fetch пропущен: upstream находится в этом локальном репозитории."));
@@ -183,6 +211,7 @@ public sealed class GitService
         if (remote is null)
             return;
         var resolvedRemote = remote.Value;
+        WriteDiagnostic($"Connection test: remote={resolvedRemote.Name}; url={resolvedRemote.Url}; ref={resolvedRemote.MergeReference}; repository={repositoryPath}; auth={settings.GitAuthenticationMode}");
         if (resolvedRemote.Url != ".")
             ValidateRemoteForAuthenticationMode(resolvedRemote.Url, settings.GitAuthenticationMode);
 
@@ -271,12 +300,12 @@ public sealed class GitService
         params string[] arguments)
         => await RunCoreAsync(repositoryPath, null, cancellationToken, null, null, arguments);
 
-    private static async Task<GitResult> RunWithAuthenticationAsync(
+    private async Task<GitResult> RunWithAuthenticationAsync(
         string repositoryPath,
         AppSettings settings,
         CancellationToken cancellationToken,
         params string[] arguments)
-        => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, null, arguments);
+        => await RunCoreAsync(repositoryPath, settings, cancellationToken, null, PublishDiagnostic, arguments);
 
     internal static Task<GitResult> ReadPageAsync(string repositoryPath, int offset, int limit,
         CancellationToken token, params string[] arguments) =>
@@ -295,7 +324,11 @@ public sealed class GitService
         params string[] arguments)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(page is null ? 120 : 30));
+        var timeoutSeconds = page is null ? 120 : 30;
+        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        var elapsed = Stopwatch.StartNew();
+        var partialError = new System.Text.StringBuilder();
+        var operation = arguments.FirstOrDefault() ?? "unknown";
         var token = timeout.Token;
         var startInfo = new ProcessStartInfo("git")
         {
@@ -336,7 +369,7 @@ public sealed class GitService
                     page?.Limit,
                     processExitCode,
                     result,
-                    failure));
+                    $"{failure} elapsed={elapsed.Elapsed.TotalSeconds:F1}s; timeout={timeoutSeconds}s; auth={settings?.GitAuthenticationMode ?? "local"}"));
             }
             catch
             {
@@ -361,7 +394,8 @@ public sealed class GitService
             PublishTrace("start_failed", failure: exception.Message);
             throw new GitException(Localization.Text(
                 "Git was not found or could not be started.",
-                "Git не найден или не может быть запущен."), exception);
+                "Git не найден или не может быть запущен.") +
+                $" Operation: {operation}; repository: {repositoryPath}; reason: {SanitizeDiagnostic(exception.Message)}", exception);
         }
 
         try
@@ -383,6 +417,8 @@ public sealed class GitService
                             return text.ToString();
                         }
                         if (skip > 0) { skip -= count; continue; }
+                        if (ReferenceEquals(reader, process.StandardError) && partialError.Length < 16_000)
+                            partialError.Append(buffer, 0, Math.Min(count, 16_000 - partialError.Length));
                         var accepted = Math.Min(count, limit - text.Length);
                         text.Append(buffer, 0, accepted);
                         if (accepted == count) continue;
@@ -413,8 +449,11 @@ public sealed class GitService
                 process.Kill(true);
             if (!cancellationToken.IsCancellationRequested)
             {
-                PublishTrace("timed_out", TryGetExitCode(process), failure: "Git process timed out; review is incomplete.");
-                throw new GitException("Git process timed out; review is incomplete.");
+                var stderr = partialError.Length == 0 ? "Git produced no stderr before timeout." : SanitizeDiagnostic(partialError.ToString());
+                var context = SanitizeDiagnostic(string.Join(" ", arguments));
+                var failure = $"Git {operation} timed out after {elapsed.Elapsed.TotalSeconds:F1}s (limit {timeoutSeconds}s). Repository: {repositoryPath}. Command: git {context}. Authentication: {settings?.GitAuthenticationMode ?? "local"}. stderr: {stderr}";
+                PublishTrace("timed_out", TryGetExitCode(process), failure: failure);
+                throw new GitException(failure);
             }
             PublishTrace("canceled", TryGetExitCode(process), failure: "Git command was canceled.");
             throw;

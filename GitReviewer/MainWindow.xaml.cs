@@ -62,6 +62,7 @@ public partial class MainWindow : Window
             _git, _model, _configuration, _stateStore, _reportWriter);
         _runner.Log += AppendLog;
         _runner.ModelLog += _details.Append;
+        _git.Diagnostic += _details.Append;
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
         _runner.CommitChanged += commit => Dispatch(() => CommitRun.Text = commit);
         _runner.Progress += AppendProgress;
