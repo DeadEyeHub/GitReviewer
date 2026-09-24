@@ -8,9 +8,18 @@ namespace GitReviewer.Services;
 public sealed class GitService
 {
     public event Action<string>? Diagnostic;
+    public event Action<string>? TransferProgress;
 
     private void PublishDiagnostic(GitCommandTrace trace)
-        => WriteDiagnostic(System.Text.Json.JsonSerializer.Serialize(trace with
+    {
+        if (trace.Stage is "stdout" or "stderr" && trace.Failure is not null)
+        {
+            var progress = SanitizeDiagnostic(trace.Failure);
+            if (TransferProgress is not null)
+                foreach (Action<string> handler in TransferProgress.GetInvocationList())
+                    try { handler(progress); } catch { }
+        }
+        WriteDiagnostic(System.Text.Json.JsonSerializer.Serialize(trace with
         {
             Arguments = trace.Arguments.Select(SanitizeDiagnostic).ToArray(),
             Failure = trace.Failure is null ? null : SanitizeDiagnostic(trace.Failure),
@@ -20,6 +29,7 @@ public sealed class GitService
                 Error = SanitizeDiagnostic(trace.Result.Error)
             }
         }));
+    }
 
     private void WriteDiagnostic(string message)
     {
@@ -185,10 +195,10 @@ public sealed class GitService
             GitResult result;
             if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
                 result = await RunWithAuthenticationAsync(repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken,
-                    "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
+                    "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
             else
                 result = await RunWithAuthenticationAsync(
-                    repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken, "fetch", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+                    repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken, "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
                     "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
             if (result.ExitCode == 0)
             {
@@ -339,7 +349,8 @@ public sealed class GitService
         params string[] arguments)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var timeoutSeconds = page is null ? 120 : 30;
+        var isFetch = page is null && arguments.FirstOrDefault() == "fetch";
+        var timeoutSeconds = isFetch ? 3600 : page is null ? 120 : 30;
         timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         var elapsed = Stopwatch.StartNew();
         var partialError = new System.Text.StringBuilder();
@@ -416,6 +427,49 @@ public sealed class GitService
         try
         {
             var more = false;
+            async Task<string> ReadTransferAsync(StreamReader reader, bool stderr)
+            {
+                // Long transfers must not fail when progress output exceeds a capture cap.
+                // Retain only a bounded tail, while draining both pipes continuously.
+                var tail = stderr ? partialError : new System.Text.StringBuilder();
+                var line = new System.Text.StringBuilder();
+                var buffer = new char[4096];
+                var lastPublished = -1d;
+                var lastLine = string.Empty;
+                var publishedLine = string.Empty;
+                void PublishLine(bool force)
+                {
+                    if (lastLine.Length == 0 || lastLine == publishedLine) return;
+                    if (!force && elapsed.Elapsed.TotalSeconds - lastPublished < 1) return;
+                    PublishTrace(stderr ? "stderr" : "stdout", failure: lastLine);
+                    publishedLine = lastLine;
+                    lastPublished = elapsed.Elapsed.TotalSeconds;
+                }
+                while (true)
+                {
+                    var count = await reader.ReadAsync(buffer.AsMemory(), token);
+                    if (count == 0) break;
+                    tail.Append(buffer, 0, count);
+                    if (tail.Length > 16_000) tail.Remove(0, tail.Length - 16_000);
+                    for (var i = 0; i < count; i++)
+                    {
+                        var character = buffer[i];
+                        if (character is '\r' or '\n')
+                        {
+                            if (line.Length > 0)
+                            {
+                                lastLine = line.ToString();
+                                line.Clear();
+                                PublishLine(false);
+                            }
+                        }
+                        else if (line.Length < 2048) line.Append(character);
+                    }
+                }
+                if (line.Length > 0) lastLine = line.ToString();
+                PublishLine(true);
+                return tail.ToString();
+            }
             async Task<string> ReadBoundedAsync(StreamReader reader, int skip, int limit, bool paging)
             {
                 try
@@ -451,8 +505,10 @@ public sealed class GitService
                     throw;
                 }
             }
-            var outputTask = ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
-            var errorTask = ReadBoundedAsync(process.StandardError, 0, 16_000, false);
+            var outputTask = isFetch ? ReadTransferAsync(process.StandardOutput, false)
+                : ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
+            var errorTask = isFetch ? ReadTransferAsync(process.StandardError, true)
+                : ReadBoundedAsync(process.StandardError, 0, 16_000, false);
             await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync(token));
             var result = new GitResult(more ? 0 : process.ExitCode, await outputTask, await errorTask, more);
             PublishTrace("completed", process.ExitCode, result);

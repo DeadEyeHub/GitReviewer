@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.7** uses native model-driven Git tools and requires a
+Version **2.1.8** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -11,6 +11,11 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
 - Reviews the selected local or remote-tracking branch tip on first connection, without scanning older commits.
 - Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
+- Fetch uses `--progress` and streams progress into the journal and status line,
+  throttled to roughly one update per second per output stream. Large transfers
+  have a one-hour timeout and can be canceled with Stop. Captured stdout/stderr
+  retain only their last 16,000 characters, so verbose progress cannot exhaust
+  the output limit. Other Git operations keep their existing shorter timeouts.
 - Supports local-only repositories without requiring a remote; automatic fetch is skipped when no upstream is configured.
 - Supports linked Git worktrees that share one common object store and repository state.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
@@ -52,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.7-win-x64.exe
+dist\GitReviewer-2.1.8-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
