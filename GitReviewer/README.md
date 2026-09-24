@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.6** uses native model-driven Git tools and requires a
+Version **2.1.7** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -16,6 +16,9 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Lets the model independently explore an immutable commit using read-only Git tools.
 - Allows manual review of any commit by its short or full SHA.
+- The editable commit selector lists the latest 100 commits on the selected branch
+  with short SHAs and subjects. Open it to refresh after fetch, or type an older
+  SHA manually. The same selection is used for manual review and automatic start.
 - Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an editable system prompt and a simple text response format instead of model-generated JSON.
@@ -49,7 +52,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.6-win-x64.exe
+dist\GitReviewer-2.1.7-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.

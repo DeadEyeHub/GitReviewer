@@ -100,6 +100,21 @@ public sealed class GitService
             "rev-parse", "--verify", "--end-of-options", $"{branchRef}^{{commit}}")).Trim();
     }
 
+    public async Task<IReadOnlyList<CommitChoice>> GetRecentCommitsAsync(
+        string repositoryPath, string branch, CancellationToken cancellationToken)
+    {
+        var head = await GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+        var result = await ReadPageAsync(repositoryPath, 0, 256_000, cancellationToken,
+            "log", "--no-show-signature", "-n", "100", "--format=%H%x09%s", head, "--");
+        if (result.ExitCode != 0 || result.HasMore)
+            throw new GitException(Localization.Text("Cannot load the recent commit list.", "Не удалось загрузить список последних коммитов."));
+        return result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r').Split('\t', 2))
+            .Where(parts => parts.Length == 2 && parts[0].Length == 40 && parts[0].All(Uri.IsHexDigit))
+            .Select(parts => new CommitChoice(parts[0], new string(parts[1].Select(c => char.IsControl(c) ? ' ' : c).Take(300).ToArray())))
+            .ToArray();
+    }
+
     public async Task<string> ResolveCommitAsync(
         string repositoryPath,
         string revision,

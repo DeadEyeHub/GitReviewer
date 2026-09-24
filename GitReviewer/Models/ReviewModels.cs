@@ -6,6 +6,11 @@ public sealed record CommitInfo(
     DateTimeOffset Date,
     string Subject);
 
+public sealed record CommitChoice(string Sha, string Subject)
+{
+    public string Display => $"{Sha[..8]} — {Subject}";
+}
+
 public sealed record Finding(
     string File,
     int? Line,

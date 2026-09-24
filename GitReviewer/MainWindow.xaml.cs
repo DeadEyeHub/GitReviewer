@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly HashSet<string> _repositoriesAwaitingTest = new(StringComparer.OrdinalIgnoreCase);
     private string _testedRepositoryIdentity = string.Empty;
     private bool _settingStartCommit;
+    private int _commitListVersion;
     private int _repositoryVersion;
     private readonly PersistentLog _journal = new(AppPaths.JournalLog);
     private readonly PersistentLog _details = new(
@@ -194,10 +195,10 @@ public partial class MainWindow : Window
             "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Если remote не настроен, fetch пропускается.");
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
-        SelectedCommitLabel.Text = Localization.Text("Selected commit SHA", "SHA выбранного коммита");
+        SelectedCommitLabel.Text = Localization.Text("Selected commit", "Выбранный коммит");
         CommitShaTextBox.ToolTip = Localization.Text(
-            "Enter a short or full commit SHA",
-            "Введите короткий или полный SHA коммита");
+            "Select from the latest 100 commits of the selected branch, or enter a short/full SHA. The list refreshes when opened.",
+            "Выберите из последних 100 коммитов выбранной ветки или введите короткий/полный SHA. Список обновляется при открытии.");
         ReviewCommitButton.Content = Localization.Text("Review commit", "Проверить коммит");
         SetStartCommitButton.Content = Localization.Text(
             "Start from selected commit",
@@ -806,6 +807,32 @@ public partial class MainWindow : Window
             StartButton.IsEnabled = !_runner.IsRunning;
             _trayStartItem.Enabled = !_runner.IsRunning;
             UpdateStartCommitButton();
+        }
+    }
+
+    private async void CommitSha_DropDownOpened(object? sender, EventArgs e)
+    {
+        var request = ++_commitListVersion;
+        var version = _repositoryVersion;
+        var path = _repositoryPath;
+        var branch = _selectedBranch;
+        var input = CommitShaTextBox.Text;
+        CommitShaTextBox.ItemsSource = null;
+        CommitShaTextBox.Text = input;
+        if (!_repositoryReady || _exitRequested) return;
+        try
+        {
+            var commits = await _git.GetRecentCommitsAsync(path, branch, CancellationToken.None);
+            if (_exitRequested || request != _commitListVersion || version != _repositoryVersion ||
+                path != _repositoryPath || branch != _selectedBranch) return;
+            var currentInput = CommitShaTextBox.Text;
+            CommitShaTextBox.ItemsSource = commits;
+            CommitShaTextBox.Text = currentInput;
+        }
+        catch (Exception exception)
+        {
+            if (!_exitRequested && request == _commitListVersion && version == _repositoryVersion)
+                ShowError(exception.Message);
         }
     }
 

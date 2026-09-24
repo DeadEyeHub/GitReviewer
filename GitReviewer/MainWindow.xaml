@@ -97,8 +97,11 @@
                     <TextBlock x:Name="SelectedCommitLabel" Grid.Row="10" Grid.Column="0" Margin="0,7,12,12"
                                Text="Selected commit SHA" />
                     <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Top">
-                        <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
-                                 VerticalContentAlignment="Center" ToolTip="Enter a short or full commit SHA" />
+                        <ComboBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
+                                  IsEditable="True" IsTextSearchEnabled="False" TextSearch.TextPath="Sha"
+                                  DisplayMemberPath="Display" MaxDropDownHeight="320"
+                                  DropDownOpened="CommitSha_DropDownOpened"
+                                  VerticalContentAlignment="Center" ToolTip="Select a commit or enter a SHA" />
                         <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
                                 Click="ReviewCommit_Click" />
                     </StackPanel>
