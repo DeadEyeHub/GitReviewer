@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.8** uses native model-driven Git tools and requires a
+Version **2.1.9** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -9,8 +9,8 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 ## Features
 
 - Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
-- Reviews the selected local or remote-tracking branch tip on first connection, without scanning older commits.
-- Fetches remote updates without checkout, pull, merge, or changes to dirty working files.
+- Reviews the selected branch tip on first connection without scanning older commits, except in local-branch fetch mode, which starts with incoming commits after the local tip.
+- Fetches remote updates; a selected checked-out local branch advances by fast-forward after each successful commit review, only with a clean working copy.
 - Fetch uses `--progress` and streams progress into the journal and status line,
   throttled to roughly one update per second per output stream. Large transfers
   have a one-hour timeout and can be canceled with Stop. Captured stdout/stderr
@@ -57,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.8-win-x64.exe
+dist\GitReviewer-2.1.9-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -88,10 +88,19 @@ commit, not just commits reachable from that branch; its report uses the selecte
 
 With **Run git fetch before each check** enabled, the selected remote-tracking
 ref is fetched from its configured remote/source ref. For a local selection,
-only its upstream objects are fetched; the local branch is deliberately not
-advanced. Select `refs/remotes/...` to monitor incoming remote commits. Fetch
-uses explicit refspecs and disables configured ref mappings so it cannot update
-local branches. For a local-only branch without an upstream, fetch is a no-op.
+the current local tip is the baseline, and incoming commits are reviewed in
+first-parent order. After the report and cursor are saved, the local branch and
+working files advance to that commit using `merge --ff-only`. A failed review
+does not advance the branch. The local tip remains authoritative on restart,
+including after an interrupted advancement. An explicit older start commit is
+reviewed through the local tip before advancing. Merge commits are reviewed
+against their first parent; side-branch commits are represented by the merge diff.
+Dirty/untracked files, an active Git operation, a different checked-out branch,
+diverged history or a baseline off the first-parent chain stop advancement.
+Do not run concurrent Git mutations during review. Hooks and autostash are disabled
+for advancement; ignored files cannot be overwritten by the merge.
+Select `refs/remotes/...` to keep working files unchanged. Fetch itself uses explicit
+refspecs and cannot move local branches. Without an upstream, fetch is a no-op.
 The legacy configuration key `pull_enabled` is retained, but now means fetch.
 
 Automatic cursors and report names use the full case-sensitive ref. State files

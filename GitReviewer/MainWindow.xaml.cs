@@ -197,8 +197,8 @@ public partial class MainWindow : Window
             "Run git fetch before each check",
             "Выполнять git fetch перед каждой проверкой");
         PullExplanationTextBlock.Text = Localization.Text(
-            "Fetch updates remote-tracking refs only, never the checkout. Select refs/remotes/... to review remote updates; local branches are read as-is. It is skipped when no remote is configured.",
-            "Fetch обновляет удаленные ссылки, не рабочие файлы. Для удаленных обновлений выберите refs/remotes/...; локальные ветки читаются как есть. Если remote не настроен, fetch пропускается.");
+            "With fetch enabled, a checked-out local branch advances one commit after each successful review (clean working copy required). Remote-tracking branches leave working files unchanged. No upstream: fetch is skipped.",
+            "При включённом fetch открытая локальная ветка продвигается на коммит после успешной проверки; нужна чистая рабочая копия. Для refs/remotes/... рабочие файлы не меняются. Без upstream fetch пропускается.");
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
         SelectedCommitLabel.Text = Localization.Text("Selected commit", "Выбранный коммит");

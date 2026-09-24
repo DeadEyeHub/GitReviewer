@@ -202,12 +202,15 @@ public sealed class GitService
                     "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
             if (result.ExitCode == 0)
             {
+                var fetchedHead = (await RunRequiredAsync(repositoryPath, cancellationToken,
+                    "rev-parse", "--verify", "FETCH_HEAD^{commit}")).Trim();
+                result = result with { FetchedCommit = fetchedHead };
                 var after = await GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
                 activity?.Invoke(before == after
                     ? Localization.Format("Fetch completed: {0} unchanged at {1}.", "Fetch выполнен: {0} без изменений, {1}.", branch, after[..8])
                     : Localization.Format("Fetch completed: {0}, {1} → {2}.", "Fetch выполнен: {0}, {1} → {2}.", branch, before[..8], after[..8]));
                 if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-                    activity?.Invoke(Localization.Text("Fetched into FETCH_HEAD. Local branch and working files are unchanged; select refs/remotes/... to review remote updates.", "Данные получены в FETCH_HEAD. Локальная ветка и рабочие файлы не изменены; для проверки удалённых обновлений выберите refs/remotes/...."));
+                    activity?.Invoke(Localization.Format("Fetched target {0}; local branch will advance after each successful review.", "Получена вершина {0}; локальная ветка будет продвигаться после каждой успешной проверки.", fetchedHead[..8]));
             }
             return result;
         }
@@ -734,11 +737,57 @@ public sealed class GitService
                !remoteUrl.Any(char.IsWhiteSpace);
     }
 
+    public async Task ValidateAdvanceAsync(string path, string branch, string expectedHead, CancellationToken token)
+    {
+        var active = (await RunRequiredAsync(path, token, "symbolic-ref", "--quiet", "HEAD")).Trim();
+        if (active != branch || await GetBranchHeadAsync(path, branch, token) != expectedHead)
+            throw new GitException(Localization.Text("The selected local branch must be checked out here and must not change during review.",
+                "Выбранная локальная ветка должна быть открыта в этой рабочей папке и не изменяться во время проверки."));
+        var status = await RunRequiredAsync(path, token, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none");
+        if (!string.IsNullOrWhiteSpace(status))
+            throw new GitException(Localization.Text("Local branch advancement requires a clean working copy, including untracked files. Commit or stash changes first.",
+                "Для продвижения локальной ветки нужна чистая рабочая копия, включая неотслеживаемые файлы. Сначала сохраните изменения коммитом или stash.") + "\n" + status.Trim());
+        foreach (var marker in new[] { "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer" })
+        {
+            var markerPath = (await RunRequiredAsync(path, token, "rev-parse", "--path-format=absolute", "--git-path", marker)).Trim();
+            if (File.Exists(markerPath) || Directory.Exists(markerPath))
+                throw new GitException("Finish the active Git merge/rebase/cherry-pick before advancing the branch.");
+        }
+    }
+
+    public async Task<IReadOnlyList<string>> GetAdvanceCommitsAsync(string path, string from, string target, CancellationToken token)
+    {
+        if (!await IsAncestorAsync(path, from, target, token))
+            throw new GitException(Localization.Text("Local and fetched history diverged; automatic advancement requires fast-forward.",
+                "Локальная и полученная история разошлись; автоматическое продвижение возможно только fast-forward."));
+        var output = await RunRequiredAsync(path, token, "rev-list", "--first-parent", "--reverse", $"{from}..{target}");
+        var commits = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (commits.Length > 0)
+        {
+            var parent = (await RunRequiredAsync(path, token, "rev-parse", commits[0] + "^1")).Trim();
+            if (parent != from) throw new GitException("Local branch is not on the fetched first-parent chain; reconcile history manually.");
+        }
+        return commits;
+    }
+
+    public async Task AdvanceBranchAsync(string path, string branch, string expectedHead, string target, CancellationToken token)
+    {
+        await ValidateAdvanceAsync(path, branch, expectedHead, token);
+        if (!await IsAncestorAsync(path, expectedHead, target, token)) throw new GitException("Only fast-forward advancement is permitted.");
+        await RunRequiredAsync(path, token, "-c", "core.hooksPath=/dev/null", "-c", "submodule.recurse=false",
+            "merge", "--ff-only", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "--", target);
+        if (await GetBranchHeadAsync(path, branch, token) != target)
+            throw new GitException("Branch tip changed during fast-forward; stop concurrent Git operations.");
+    }
+
     private static string NormalizePath(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
 }
 
-public sealed record GitResult(int ExitCode, string Output, string Error, bool HasMore = false);
+public sealed record GitResult(int ExitCode, string Output, string Error, bool HasMore = false)
+{
+    public string? FetchedCommit { get; init; }
+}
 
 internal sealed record GitCommandTrace(
     string Stage,

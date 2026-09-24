@@ -204,6 +204,7 @@ public sealed class ReviewRunner
         var position = await _stateStore.GetReviewPositionAsync(
             identity.CommonGitDirectory, branch, cancellationToken);
         var previousCommit = position.Cursor;
+        string? fetchedTarget = null;
 
         if (settings.PullEnabled)
         {
@@ -229,6 +230,31 @@ public sealed class ReviewRunner
                     fetch.ExitCode,
                     GitService.SanitizeDiagnostic(details.Trim())));
             }
+            fetchedTarget = fetch.FetchedCommit;
+        }
+
+        if (fetchedTarget is not null && branch.StartsWith("refs/heads/", StringComparison.Ordinal))
+        {
+            var localHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+            var advancing = await _git.GetAdvanceCommitsAsync(repositoryPath, localHead, fetchedTarget, cancellationToken);
+            if (advancing.Count > 0)
+                await _git.ValidateAdvanceAsync(repositoryPath, branch, localHead, cancellationToken);
+            if (position.PendingStart is not null)
+            {
+                if (!await _git.IsAncestorAsync(repositoryPath, position.PendingStart, localHead, cancellationToken))
+                    throw new GitException("Selected start commit must be an ancestor of the local branch tip.");
+                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, position.PendingStart, profile, cancellationToken);
+                foreach (var oldSha in await _git.GetCommitsAfterAsync(repositoryPath, position.PendingStart, localHead, cancellationToken))
+                    await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, oldSha, profile, cancellationToken);
+            }
+            Publish(Log, Localization.Format("Local baseline {0}; fetched tip {1}; commits to review and advance: {2}.",
+                "Локальная точка старта {0}; полученная вершина {1}; коммитов для проверки и продвижения: {2}.", Short(localHead), Short(fetchedTarget), advancing.Count));
+            foreach (var nextSha in advancing)
+            {
+                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, nextSha, profile, cancellationToken, localHead);
+                localHead = nextSha;
+            }
+            return;
         }
 
         if (position.PendingStart is not null)
@@ -283,12 +309,19 @@ public sealed class ReviewRunner
         string branch,
         string sha,
         ModelProfile profile,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? advanceFrom = null)
     {
         var result = await AnalyzeAndReportAsync(
             repositoryPath, repositoryIdentity, branch, sha, profile, false, cancellationToken);
         Emit(ReviewStage.SavingCursor, profile, sha);
         await _stateStore.SetCursorAsync(repositoryIdentity, branch, sha, cancellationToken);
+        if (advanceFrom is not null)
+        {
+            await _git.AdvanceBranchAsync(repositoryPath, branch, advanceFrom, sha, cancellationToken);
+            Publish(Log, Localization.Format("Local branch {0} advanced: {1} → {2}.",
+                "Локальная ветка {0} продвинута: {1} → {2}.", branch, Short(advanceFrom), Short(sha)));
+        }
         Complete(repositoryPath, branch, sha, profile, result, false, cancellationToken);
         Log?.Invoke(Localization.Format(
             "Commit {0} reviewed, findings: {1}.",
