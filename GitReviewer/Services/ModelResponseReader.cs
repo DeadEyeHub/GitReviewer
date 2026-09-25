@@ -7,6 +7,29 @@ namespace GitReviewer.Services;
 
 public static class ModelResponseReader
 {
+    public const int ReasoningLimit = 2_000_000;
+    public const int ContentLimit = 1_000_000;
+    public const int ToolLimit = 256_000;
+    public const int TransportLimit = 128_000_000;
+
+    private sealed class ResponseBudget
+    {
+        private long _reasoning, _content, _tools;
+        public void Add(string field, int length)
+        {
+            ref long used = ref _tools;
+            var limit = ToolLimit;
+            var category = "tool_calls";
+            if (field is "reasoning" or "reasoning_content")
+            { used = ref _reasoning; limit = ReasoningLimit; category = "reasoning + reasoning_content"; }
+            else if (field == "content")
+            { used = ref _content; limit = ContentLimit; category = "content"; }
+            used += length;
+            if (used > limit)
+                throw new InvalidDataException($"Model response {category} budget exceeded: {used} characters received, limit {limit}; review incomplete.");
+        }
+    }
+
     public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token)
     {
         using var stream = await content.ReadAsStreamAsync(token);
@@ -22,7 +45,7 @@ public static class ModelResponseReader
         string? finish = null;
         var done = false;
         var total = 0;
-        var payloadSize = 0;
+        var budget = new ResponseBudget();
         void Event()
         {
             if (data.Length == 0) return;
@@ -41,7 +64,7 @@ public static class ModelResponseReader
                     if (delta.TryGetProperty(field, out var part) && part.ValueKind != JsonValueKind.Null)
                     {
                         var fragment = part.GetString()!;
-                        payloadSize += fragment.Length;
+                        budget.Add(field, fragment.Length);
                         log?.Invoke($"MODEL {field}: {fragment}");
                         if (field == "content") text.Append(fragment);
                         else if (field == "reasoning") reasoning.Append(fragment);
@@ -55,18 +78,22 @@ public static class ModelResponseReader
                         if (!calls.TryGetValue(index, out var target))
                             calls[index] = target = new JsonObject { ["id"] = "", ["type"] = "", ["function"] = new JsonObject { ["name"] = "", ["arguments"] = "" } };
                         foreach (var field in new[] { "id", "type" })
-                            if (call.TryGetProperty(field, out var part)) target[field] = target[field]!.GetValue<string>() + part.GetString();
+                            if (call.TryGetProperty(field, out var part))
+                            {
+                                var fragment = part.GetString()!;
+                                budget.Add("tool_calls", fragment.Length);
+                                target[field] = target[field]!.GetValue<string>() + fragment;
+                            }
                         if (call.TryGetProperty("function", out var function))
                             foreach (var field in new[] { "name", "arguments" })
                                 if (function.TryGetProperty(field, out var part))
                                 {
                                     var fragment = part.GetString()!;
-                                    payloadSize += fragment.Length;
+                                    budget.Add("tool_calls", fragment.Length);
                                     target["function"]![field] = target["function"]![field]!.GetValue<string>() + fragment;
                                 }
                     }
                 if (choice.TryGetProperty("finish_reason", out var reason) && reason.ValueKind != JsonValueKind.Null) finish = reason.GetString();
-                if (payloadSize > 128_000) throw new InvalidDataException("Model response exceeds 128000 characters; review incomplete.");
             }
         }
         var buffer = new char[4096];
@@ -76,7 +103,7 @@ public static class ModelResponseReader
             // Retain received partial content even when canceled or malformed. Never log HTTP headers/URLs.
             log?.Invoke("HTTP response data: " + new string(buffer, 0, count));
             total += count;
-            if (total > (streaming ? 4_000_000 : 128_000)) throw new InvalidDataException("Model HTTP response budget exhausted; review incomplete.");
+            if (total > TransportLimit) throw new InvalidDataException($"Model HTTP response budget exceeded: {total} characters received, limit {TransportLimit}; review incomplete.");
             if (!streaming) { body.Append(buffer, 0, count); continue; }
             for (var i = 0; i < count; i++)
             {
@@ -96,6 +123,26 @@ public static class ModelResponseReader
         if (!streaming)
         {
             var document = JsonDocument.Parse(body.ToString());
+            try
+            {
+                foreach (var choice in document.RootElement.GetProperty("choices").EnumerateArray())
+                {
+                    var returnedMessage = choice.GetProperty("message");
+                    foreach (var field in new[] { "content", "reasoning", "reasoning_content" })
+                        if (returnedMessage.TryGetProperty(field, out var value) && value.ValueKind != JsonValueKind.Null)
+                            budget.Add(field, value.GetString()!.Length);
+                    if (returnedMessage.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind != JsonValueKind.Null)
+                        foreach (var call in toolCalls.EnumerateArray())
+                        {
+                            foreach (var field in new[] { "id", "type" })
+                                if (call.TryGetProperty(field, out var value)) budget.Add("tool_calls", value.GetString()!.Length);
+                            if (call.TryGetProperty("function", out var function))
+                                foreach (var field in new[] { "name", "arguments" })
+                                    if (function.TryGetProperty(field, out var value)) budget.Add("tool_calls", value.GetString()!.Length);
+                        }
+                }
+            }
+            catch { document.Dispose(); throw; }
             LogReturnedMessage(document.RootElement, log);
             return document;
         }

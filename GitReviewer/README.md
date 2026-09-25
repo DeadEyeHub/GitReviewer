@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.12** uses native model-driven Git tools and requires a
+Version **2.1.13** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -57,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.12-win-x64.exe
+dist\GitReviewer-2.1.13-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -321,8 +321,14 @@ but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
 with replacement for invalid bytes, not a binary download API.
 
 Budgets per review: 32 model rounds, 64 tool calls, 512,000 serialized tool-result
-characters, 128,000 characters per HTTP response, and a 10-minute overall agent
-deadline. Each tool subprocess has a 30-second timeout and bounded stderr.
+characters, and a 10-minute overall agent deadline. Each model response has independent
+decoded-character budgets: 2,000,000 combined for `reasoning` + `reasoning_content`,
+1,000,000 for `content`, and 256,000 for tool-call names/arguments and envelope
+strings (IDs/types). Both SSE and non-streaming JSON enforce these budgets.
+The raw HTTP/SSE transport limit is 128,000,000 characters including JSON overhead;
+SSE is processed incrementally. Errors identify the exhausted category, received
+count and limit. Git-result budgets and context-window limits are unchanged.
+Each tool subprocess has a 30-second timeout and bounded stderr.
 Custom prompts are capped at 32,000 characters. Cancellation kills Git process
 trees and cancels HTTP work. Invalid arguments and unknown tools produce safe
 error results for correction within the same budgets. Once arguments are valid,
