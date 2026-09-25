@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.14** uses native model-driven Git tools and requires a
+Version **2.1.15** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -75,7 +75,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.14-win-x64.exe
+dist\GitReviewer-2.1.15-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -338,8 +338,12 @@ directory rather than enumerating the entire repository. Binary diff markers are
 but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
 with replacement for invalid bytes, not a binary download API.
 
-Budgets per review: 32 model rounds, 64 tool calls, 512,000 serialized tool-result
-characters, and a 10-minute overall agent deadline. Each model response has independent
+Budgets per review: 60 model rounds, 64 tool calls, 512,000 serialized tool-result
+characters, and a 10-minute overall agent deadline. Requests 41–60 include a fresh
+budget reminder counting remaining model requests including the current request
+(20 down to 1), with instructions to reserve a final report. Old reminders are not
+accumulated in conversation history. Evidence/completeness requirements remain unchanged.
+Each model response has independent
 decoded-character budgets: 2,000,000 combined for `reasoning` + `reasoning_content`,
 1,000,000 for `content`, and 256,000 for tool-call names/arguments and envelope
 strings (IDs/types). Both SSE and non-streaming JSON enforce these budgets.
