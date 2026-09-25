@@ -15,7 +15,10 @@ internal static class LogTextView
         var selectionStart = box.SelectionStart;
         var selectionLength = box.SelectionLength;
         var firstLine = box.GetFirstVisibleLineIndex();
-        var anchor = firstLine >= 0 ? box.GetCharacterIndexFromLineIndex(firstLine) : -1;
+        // Hidden/unloaded TextBoxes can report visible line 0 with LineCount 0.
+        // A visible-line index is usable only against the current layout.
+        var anchor = firstLine >= 0 && firstLine < box.LineCount
+            ? box.GetCharacterIndexFromLineIndex(firstLine) : -1;
         var relocatedAnchor = -1;
 
         if (text.StartsWith(previous, StringComparison.Ordinal))
@@ -43,7 +46,11 @@ internal static class LogTextView
         box.UpdateLayout();
         if (followEnd) box.ScrollToEnd();
         else if (relocatedAnchor >= 0)
-            box.ScrollToLine(box.GetLineIndexFromCharacterIndex(relocatedAnchor));
+        {
+            var line = box.GetLineIndexFromCharacterIndex(relocatedAnchor);
+            if (line >= 0 && line < box.LineCount) box.ScrollToLine(line);
+            else box.ScrollToVerticalOffset(vertical);
+        }
         else box.ScrollToVerticalOffset(vertical);
         box.ScrollToHorizontalOffset(horizontal);
     }

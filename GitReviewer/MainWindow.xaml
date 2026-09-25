@@ -68,8 +68,12 @@
                     <TextBlock x:Name="ProjectFolderLabel" Grid.Row="0" Grid.Column="0" Margin="0,7,12,12" Text="Project folder" />
                     <TextBox x:Name="RepositoryPathTextBox" Grid.Row="0" Grid.Column="1" Margin="0,0,8,12"
                              VerticalContentAlignment="Center" TextChanged="RepositoryPath_Changed" />
-                    <Button x:Name="BrowseButton" Grid.Row="0" Grid.Column="2" Margin="0,0,0,12" Padding="18,6"
+                    <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,12">
+                    <Button x:Name="BrowseButton" Padding="18,6"
                             Content="Browse..." Click="BrowseRepository_Click" />
+                    <Button x:Name="ReviewFromSelectedButton" Margin="0,4,0,0" Padding="8,6"
+                            Content="Review selected and later" IsEnabled="False" Click="ReviewFromSelected_Click" />
+                    </StackPanel>
 
                     <TextBlock x:Name="IntervalLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Interval, seconds" />
                     <TextBox x:Name="IntervalTextBox" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"

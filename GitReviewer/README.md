@@ -248,6 +248,14 @@ current commit. The SHA must be an ancestor of the selected branch tip. It is
 stored as a pending start, so the selected commit is reviewed first. The normal
 branch cursor replaces it only after that review succeeds.
 
+**Review selected and later**, beside the repository picker, saves that same
+pending start and immediately starts automatic review (selected commit included).
+It uses the SHA in **Selected commit SHA** and the selected branch; normal access
+validation and stop/error behavior apply. Automatic monitoring continues afterward.
+
+Journal updates tolerate hidden and not-yet-laid-out text fields, including the
+separate details window. Scroll anchors are validated against the current layout.
+
 ### Native Git Agent
 
 `ReviewRunner` validates the repository, fixes the reviewed full SHA, checks for

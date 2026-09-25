@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly HashSet<string> _repositoriesAwaitingTest = new(StringComparer.OrdinalIgnoreCase);
     private string _testedRepositoryIdentity = string.Empty;
     private bool _settingStartCommit;
+    private bool _startingReview;
     private int _commitListVersion;
     private int _repositoryVersion;
     private readonly PersistentLog _journal = new(AppPaths.JournalLog);
@@ -229,6 +230,10 @@ public partial class MainWindow : Window
             "Select from the latest 100 commits of the selected branch, or enter a short/full SHA. The list refreshes when opened.",
             "Выберите из последних 100 коммитов выбранной ветки или введите короткий/полный SHA. Список обновляется при открытии.");
         ReviewCommitButton.Content = Localization.Text("Review commit", "Проверить коммит");
+        ReviewFromSelectedButton.Content = Localization.Text("Review selected and later", "Выбранный и последующие");
+        ReviewFromSelectedButton.ToolTip = Localization.Text(
+            "Start automatic review with the Selected commit SHA, then review subsequent commits on the selected branch.",
+            "Запустить проверку с коммита из поля «Выбранный коммит SHA», затем проверять последующие коммиты выбранной ветки.");
         SetStartCommitButton.Content = Localization.Text(
             "Start from selected commit",
             "Начать с выбранного коммита");
@@ -811,7 +816,7 @@ public partial class MainWindow : Window
 
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)
     {
-        if (_exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit)
+        if (_exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
             return;
 
         try
@@ -879,8 +884,16 @@ public partial class MainWindow : Window
     }
 
     private async void SetStartCommit_Click(object sender, RoutedEventArgs e)
+        => await SetStartCommitAsync();
+
+    private async void ReviewFromSelected_Click(object sender, RoutedEventArgs e)
     {
-        if (!CanSetStartCommit()) return;
+        if (await SetStartCommitAsync()) await StartReviewAsync();
+    }
+
+    private async Task<bool> SetStartCommitAsync()
+    {
+        if (!CanSetStartCommit()) return false;
 
         var version = _repositoryVersion;
         var repositoryPath = _repositoryPath;
@@ -919,10 +932,12 @@ public partial class MainWindow : Window
                 "Автоматическая проверка начнется с коммита {0} в {1}.",
                 sha[..8],
                 branch));
+            return true;
         }
         catch (Exception exception)
         {
             ShowError(exception.Message);
+            return false;
         }
         finally
         {
@@ -941,8 +956,10 @@ public partial class MainWindow : Window
     private async Task StartReviewAsync()
     {
         var repositoryVersion = _repositoryVersion;
-        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false } || _settingStartCommit)
+        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
             return;
+        _startingReview = true;
+        UpdateStartCommitButton();
         StartButton.IsEnabled = false;
         _trayStartItem.Enabled = false;
         ReviewCommitButton.IsEnabled = false;
@@ -985,6 +1002,11 @@ public partial class MainWindow : Window
         {
             SetRunningControls(_runner.IsRunning);
             ShowError(exception.Message);
+        }
+        finally
+        {
+            _startingReview = false;
+            UpdateStartCommitButton();
         }
     }
 
@@ -1127,9 +1149,14 @@ public partial class MainWindow : Window
         !_runner.IsRunning &&
         _manualReviewTask is not { IsCompleted: false } &&
         !_settingStartCommit &&
+        !_startingReview &&
         (_repositoryWasKnown || _testedRepositoryIdentity == GetRepositoryTestIdentity());
 
-    private void UpdateStartCommitButton() => SetStartCommitButton.IsEnabled = CanSetStartCommit();
+    private void UpdateStartCommitButton()
+    {
+        SetStartCommitButton.IsEnabled = CanSetStartCommit();
+        ReviewFromSelectedButton.IsEnabled = CanSetStartCommit();
+    }
 
     private void SetStatus(string status)
     {
