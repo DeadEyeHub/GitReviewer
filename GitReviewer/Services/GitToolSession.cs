@@ -9,6 +9,7 @@ public sealed class GitToolSession : IDisposable
     private const int RangeInputLimit = 512_000;
     private readonly string _repository;
     private readonly HashSet<string> _commits = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _verifiedFiles = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _nextOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<int>> _readOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FileStream> _snapshots = new(StringComparer.Ordinal);
@@ -84,7 +85,7 @@ public sealed class GitToolSession : IDisposable
         };
         if (name is not ("git_metadata" or "git_history"))
             properties["offset"] = new { type = "integer", minimum = 0, maximum = int.MaxValue, description = "Initially 0; follow next_offset with the same arguments." };
-        if (name is "git_tree" or "git_search")
+        if (name is "git_tree" or "git_search" or "git_history")
             properties["path"] = new
             {
                 type = "string",
@@ -113,7 +114,7 @@ public sealed class GitToolSession : IDisposable
             description = name switch
             {
                 "git_metadata" => "Commit metadata and parents. commit defaults to reviewed SHA; only discovered full SHAs allowed.",
-                "git_history" => "Discover up to 20 ancestors and their parents from an allowed commit. Bounded local history only.",
+                "git_history" => "Up to 20 commits with SHA, parents and subject. Optional file path restricts history and follows renames, returning A/M/D/R changes and old/new paths. Rename detection is heuristic; history may be truncated or shallow. Start from the reviewed SHA, only investigate older history for a concrete question.",
                 "git_changed_files" => "Page changed file names/status for reviewed SHA against first parent (root against empty tree). Start offset=0; auxiliary pages are optional.",
                 "git_diff" => "Read the reviewed commit patch, including binary/mode changes. Start offset=0 and follow next_offset until null before final report.",
                 "git_tree" => "Browse committed directory children, optionally recursive and scoped by path. Auxiliary pages need not all be read.",
@@ -177,10 +178,29 @@ public sealed class GitToolSession : IDisposable
         var expectedOffset = _nextOffsets.GetValueOrDefault(key);
         if (!replay && offset != expectedOffset)
             throw new ArgumentException($"Offset {offset} has not been read. Expected offset: {expectedOffset}. Use that offset to continue, or repeat a previously returned page offset (including 0). Do not skip unread content.");
+        if (name == "git_history") return await ReadHistoryAsync(commit, path, token, trace);
+        if (name == "git_file" && !_verifiedFiles.Contains(commit + ":" + path))
+        {
+            // Inspect the committed tree, never stderr wording or working-copy existence.
+            // A present tree entry with an unavailable blob must still fail when read.
+            var entry = await GitService.ReadPageAsync(_repository, 0, PageSize, token, trace,
+                "ls-tree", "-z", "--full-tree", commit, "--", path!);
+            if (entry.ExitCode != 0 || entry.HasMore)
+                throw new GitException("Cannot inspect the requested commit tree; review is incomplete. " + entry.Error);
+            if (entry.Output.Length == 0)
+                return JsonSerializer.Serialize(new
+                {
+                    status = "not_found",
+                    reviewed_sha = Sha,
+                    commit,
+                    path,
+                    message = "This path does not exist in this commit. This is not a working-copy read. Inspect git_tree or git_history with path for additions/renames, or read the reviewed SHA. Absence alone is not a bug."
+                });
+            _verifiedFiles.Add(commit + ":" + path);
+        }
         var command = name switch
         {
             "git_metadata" => new[] { "cat-file", "commit", commit },
-            "git_history" => new[] { "log", "--no-show-signature", "--format=%H %P", "-n", "20", commit, "--" },
             "git_changed_files" => DiffArguments(true),
             "git_diff" => DiffArguments(false),
             "git_tree" => (recursive ? new[] { "ls-tree", "-r", "--full-tree", commit, "--" } : new[] { "ls-tree", "--full-tree", commit, "--" })
@@ -242,12 +262,10 @@ public sealed class GitToolSession : IDisposable
         if (result.ExitCode != 0) throw new GitException("Git could not read that local object/path; review is incomplete. No network fetch is permitted.");
         if (result.HasMore && name is "git_metadata" or "git_history")
             throw new GitException("Metadata output limit exceeded; review is incomplete.");
-        if (name is "git_metadata" or "git_history")
+        if (name == "git_metadata")
         {
             var lines = result.Output.Split('\n');
-            var ids = name == "git_metadata"
-                ? lines.TakeWhile(line => line.Length > 0).Where(line => line.StartsWith("parent ", StringComparison.Ordinal)).Select(line => line[7..])
-                : lines.AsEnumerable();
+            var ids = lines.TakeWhile(line => line.Length > 0).Where(line => line.StartsWith("parent ", StringComparison.Ordinal)).Select(line => line[7..]);
             foreach (var id in ids.SelectMany(line => line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)))
                 if (id.Length == 40 && id.All(Uri.IsHexDigit) && _commits.Count < 1024) _commits.Add(id);
         }
@@ -272,6 +290,63 @@ public sealed class GitToolSession : IDisposable
             offset,
             next_offset = result.HasMore ? (int?)next : null,
             content = result.Output
+        });
+    }
+
+    private async Task<string> ReadHistoryAsync(string commit, string? path, CancellationToken token, Action<GitCommandTrace>? trace)
+    {
+        var command = new List<string> { "log", "--no-show-signature", "--no-color", "--no-ext-diff", "--no-textconv",
+            "-z", "--format=%H%x00%P%x00%s", "-n", "20" };
+        if (path is not null) command.AddRange(["--follow", "--find-renames=50%", "--name-status", "--diff-merges=first-parent"]);
+        command.Add(commit);
+        command.Add("--");
+        if (path is not null) command.Add(path);
+        var result = await GitService.ReadPageAsync(_repository, 0, 256_000, token, trace, command.ToArray());
+        if (result.ExitCode != 0) throw new GitException("Cannot read local commit history. " + result.Error);
+        if (result.HasMore) throw new GitToolQueryException("History output exceeds 256000 characters. Use a more specific file path or inspect commit metadata individually.");
+        var fields = result.Output.Split('\0');
+        var records = new List<object>();
+        var discovered = new List<string>();
+        var index = 0;
+        static bool IsSha(string value) => value.Length == 40 && value.All(Uri.IsHexDigit);
+        while (index < fields.Length && fields[index].Trim('\r', '\n').Length > 0)
+        {
+            var sha = fields[index++].Trim('\r', '\n');
+            if (!IsSha(sha) || index + 1 >= fields.Length) throw new GitException("Malformed Git history record.");
+            var parents = fields[index++].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parents.Any(parent => !IsSha(parent))) throw new GitException("Malformed Git history parents.");
+            var subject = fields[index++];
+            var changes = new List<object>();
+            while (path is not null && index < fields.Length)
+            {
+                var status = fields[index].Trim('\r', '\n');
+                if (status.Length == 0 || IsSha(status)) break;
+                index++;
+                if (!System.Text.RegularExpressions.Regex.IsMatch(status, "^(?:[AMDTU]|[RC][0-9]{1,3})$") || index >= fields.Length)
+                    throw new GitException("Malformed Git history change.");
+                var oldPath = fields[index++];
+                string? newPath = status[0] is 'R' or 'C'
+                    ? index < fields.Length ? fields[index++] : throw new GitException("Missing rename destination.")
+                    : status == "D" ? null : oldPath;
+                changes.Add(new { status, old_path = status == "A" ? null : oldPath, new_path = newPath });
+            }
+            records.Add(new { sha, parents, subject, changes });
+            discovered.Add(sha);
+            discovered.AddRange(parents);
+        }
+        // Only structural SHA fields authorize reads; subjects and paths are untrusted text.
+        foreach (var sha in discovered)
+            if (_commits.Count < 1024) _commits.Add(sha);
+        return JsonSerializer.Serialize(new
+        {
+            status = "ok",
+            reviewed_sha = Sha,
+            commit,
+            path,
+            limit = 20,
+            history_may_be_incomplete = true,
+            note = "Bounded local history; shallow boundaries and merge simplification can omit earlier changes. Rename detection is heuristic. Titles are hints, not evidence.",
+            commits = records
         });
     }
 

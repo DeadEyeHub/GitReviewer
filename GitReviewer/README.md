@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.10** uses native model-driven Git tools and requires a
+Version **2.1.11** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -57,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.10-win-x64.exe
+dist\GitReviewer-2.1.11-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -217,7 +217,7 @@ sequentially, even though parallel tool calls are disabled in requests.
 | Tool | Scope |
 | --- | --- |
 | `git_metadata` | Commit metadata and parents for the target or a discovered full SHA |
-| `git_history` | Up to 20 ancestors and parents per call, starting from an allowed SHA |
+| `git_history` | Up to 20 structured commit records (SHA, parents, subject); optional file `path` follows renames and returns change statuses and old/new paths |
 | `git_changed_files` | Paginated names/status against the target's first parent |
 | `git_diff` | Paginated full target patch, root commits compared with the empty tree |
 | `git_file` | Paginated committed blob, optionally an inclusive numbered `start_line`/`end_line` range |
@@ -247,6 +247,20 @@ and user-supplied Git flags are not accepted by tools. Only the target, its pare
 and full SHAs discovered through bounded history/metadata are allowed (at most
 1024 remembered SHAs). As with manual SHA input, repositories currently use
 40-character SHA-1 object IDs; SHA-256 repositories are not supported.
+Only structural SHA/parent fields discovered by history authorize further reads;
+hash-like text in subjects or filenames does not. File history reports additions,
+modifications, deletions and detected renames. Rename detection uses 50% similarity
+and is heuristic; bounded/shallow history and merge simplification may omit changes.
+Subjects are navigation hints, not evidence. Start with the reviewed diff and relevant
+files at the reviewed SHA and its immediate first parent. Consult older history only
+to answer a specific unresolved question about origins, contracts or renamed files.
+
+When `git_file` requests a path absent from an available commit tree, it returns
+`status: "not_found"` with the requested SHA/path and suggestions to inspect tree/file
+history. This normal result does not abort review or substitute working-copy contents.
+It also applies to numbered-range reads. The journal reports that investigation
+continues. An existing tree entry with an unreadable/missing blob, unavailable commit,
+damaged tree or timeout remains a failure, not an absent-path result.
 Changing the selected branch or dirty checkout cannot
 change the session's target. Renames are shown as deletion/addition, and merge
 commits are reviewed against their first parent, not a combined merge diff.
@@ -302,7 +316,7 @@ deadline. Each tool subprocess has a 30-second timeout and bounded stderr.
 Custom prompts are capped at 32,000 characters. Cancellation kills Git process
 trees and cancels HTTP work. Invalid arguments and unknown tools produce safe
 error results for correction within the same budgets. Once arguments are valid,
-a Git retrieval failure (including a nonexistent path or unavailable blob) is
+a Git retrieval failure (including an unavailable blob, but not a confirmed absent path) is
 fatal: reading an unrelated resource cannot clear a missing-context failure.
 Malformed response
 envelopes, unrecovered argument errors, model-output/budget exhaustion, unfinished diff pages,
