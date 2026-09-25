@@ -54,6 +54,11 @@ public partial class MainWindow : Window
         AppPaths.ModelLog, maxBytes: 32 * 1024 * 1024, maxTailLines: 10_000, maxTailCharacters: 4_000_000);
     private readonly System.Windows.Threading.DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private LogWindow? _logWindow;
+    private readonly TokenUsageStore _tokenUsage = new(Path.Combine(AppPaths.DataDirectory, "token-usage.json"));
+    private readonly System.Diagnostics.Stopwatch _commitClock = new();
+    private DateTimeOffset? _nextAutomaticRun;
+    private int? _remainingCommits;
+    private string? _usageCommitKey;
 
     public MainWindow()
     {
@@ -77,9 +82,18 @@ public partial class MainWindow : Window
         };
         _runner.CommitInfoChanged += commit => Dispatch(() =>
         {
+            CommitRun.Text = commit.Sha;
             CommitSubjectTextBlock.Text = commit.Subject;
             CommitSubjectTextBlock.ToolTip = commit.Subject;
+            CommitDetailsText.Text = $"{commit.Author} · {commit.Date.LocalDateTime:g}";
         });
+        _runner.RemainingChanged += count => Dispatch(() => _remainingCommits = count);
+        _runner.NextRunChanged += next => Dispatch(() => _nextAutomaticRun = next);
+        _runner.UsageReceived += item =>
+        {
+            _tokenUsage.Record(item.Repository, item.Sha, item.Usage, DateTimeOffset.Now);
+            Dispatch(() => _usageCommitKey = TokenUsageStore.Key(item.Repository, item.Sha));
+        };
         _runner.Progress += AppendProgress;
         _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
         _logTimer.Tick += (_, _) => RefreshLogs();
@@ -255,6 +269,9 @@ public partial class MainWindow : Window
 
         StatusLabelRun.Text = Localization.Text("Status: ", "Статус: ");
         CurrentCommitLabelRun.Text = Localization.Text("Current commit: ", "Текущий коммит: ");
+        DashboardTab.Header = Localization.Text("Dashboard", "Дашборд");
+        RecentJournalLabel.Text = Localization.Text("Recent journal entries", "Последние записи журнала");
+        ClearJournalButton.Content = Localization.Text("Clear journal", "Очистить журнал");
         StartButton.Content = Localization.Text("Start", "Старт");
         StopButton.Content = Localization.Text("Stop", "Стоп");
         OpenReportButton.Content = Localization.Text("Open report", "Открыть отчет");
@@ -553,6 +570,16 @@ public partial class MainWindow : Window
     private async Task RefreshRepositoryInfoAsync()
     {
         var version = ++_repositoryVersion;
+        if (!_runner.IsRunning && _manualReviewTask is not { IsCompleted: false })
+        {
+            CommitRun.Text = "-";
+            CommitSubjectTextBlock.Text = string.Empty;
+            CommitSubjectTextBlock.ToolTip = null;
+            CommitDetailsText.Text = string.Empty;
+            _usageCommitKey = null;
+            _remainingCommits = null;
+            _commitClock.Reset();
+        }
         var selected = _selectedBranch;
         _repositoryReady = false;
         _repositoryPath = string.Empty;
@@ -884,6 +911,9 @@ public partial class MainWindow : Window
             CommitRun.Text = sha[..8];
             CommitSubjectTextBlock.Text = commitInfo.Subject;
             CommitSubjectTextBlock.ToolTip = commitInfo.Subject;
+            CommitDetailsText.Text = $"{commitInfo.Author} · {commitInfo.Date.LocalDateTime:g}";
+            _usageCommitKey = TokenUsageStore.Key(repositoryIdentity, sha);
+            _commitClock.Reset();
             AppendLog(Localization.Format(
                 "Automatic review will start with commit {0} on {1}.",
                 "Автоматическая проверка начнется с коммита {0} в {1}.",
@@ -1117,8 +1147,45 @@ public partial class MainWindow : Window
         if (_journal.Snapshot() is { } journal)
         {
             LogTextView.Update(LogTextBox, journal);
+            RecentJournalItems.ItemsSource = journal.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(4).ToArray();
         }
         if (_logWindow is not null && _details.Snapshot() is { } details) _logWindow.SetText(details);
+        RefreshDashboard();
+    }
+
+    private void RefreshDashboard()
+    {
+        var now = DateTimeOffset.Now;
+        var tokens = _tokenUsage.Snapshot(_usageCommitKey, now);
+        string Count(TokenTally tally) => tally.Requests == 0 ? "0" : tally.MissingUsage == tally.Requests
+            ? Localization.Text("Unavailable", "Нет данных")
+            : tally.Tokens.ToString("N0") + (tally.MissingUsage > 0 ? " + ?" : "");
+        CommitTokensText.Text = Localization.Text("Tokens · this commit\n", "Токены · этот коммит\n") + Count(tokens.Commit);
+        TodayTokensText.Text = Localization.Text("Tokens · today\n", "Токены · сегодня\n") + Count(tokens.Today);
+        TotalTokensText.Text = Localization.Text("Tokens · all time\n", "Токены · всего\n") + Count(tokens.Total);
+        RemainingCommitsText.Text = Localization.Text("Commits remaining (incl. current)\n", "Коммитов осталось (с текущим)\n") + (_remainingCommits?.ToString() ?? "—");
+        static string Duration(TimeSpan time) => $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}";
+        ElapsedText.Text = Localization.Text("Commit processing time\n", "Время обработки коммита\n") + Duration(_commitClock.Elapsed);
+        NextRunText.Text = Localization.Text("Next automatic check\n", "До следующего автозапуска\n") +
+            (_nextAutomaticRun is { } next ? Duration(next > now ? next - now : TimeSpan.Zero) :
+                _runner.IsRunning ? Localization.Text("After this cycle", "После текущего цикла") : "—");
+        DashboardRepositoryText.Text = string.IsNullOrWhiteSpace(_repositoryPath)
+            ? Localization.Text("Select a repository on the Project tab", "Выберите репозиторий на вкладке «Проект»")
+            : $"{_repositoryPath}\n{_selectedBranch}";
+        UsageNoteText.Text = _tokenUsage.Error ?? Localization.Format(
+            "Provider-reported input + output tokens, across retries. Since tracking was enabled. Requests without usage: {0} today / {1} total; totals may be incomplete.",
+            "Токены входа + выхода по данным сервера, включая повторы. С момента включения учёта. Запросов без usage: {0} сегодня / {1} всего; суммы могут быть неполными.",
+            tokens.Today.MissingUsage, tokens.Total.MissingUsage);
+    }
+
+    private void ClearJournal_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.MessageBox.Show(this, Localization.Text(
+            "Clear the journal and its rotated copy? Reports, detailed log and token counters are retained.",
+            "Очистить журнал и его предыдущую копию? Отчёты, подробный лог и счётчики токенов сохранятся."),
+            Localization.Text("Clear journal", "Очистить журнал"), MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _journal.Clear(); RefreshLogs(); }
+        catch (Exception exception) { ShowError(exception.Message); }
     }
 
     private void Dispatch(Action action)
@@ -1159,6 +1226,17 @@ public partial class MainWindow : Window
 
     private void AppendProgress(ReviewProgress progress)
     {
+        Dispatch(() =>
+        {
+            if (progress.Stage == ReviewStage.Started)
+            {
+                _commitClock.Restart();
+                CommitDetailsText.Text = string.Empty;
+                var repository = string.IsNullOrWhiteSpace(_repositoryCommonGitDirectory) ? _repositoryPath : _repositoryCommonGitDirectory;
+                _usageCommitKey = string.IsNullOrWhiteSpace(repository) ? null : TokenUsageStore.Key(repository, progress.Commit);
+            }
+            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled) _commitClock.Stop();
+        });
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
         var detail = new string(progress.Detail.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();

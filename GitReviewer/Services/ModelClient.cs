@@ -78,7 +78,8 @@ public sealed class ModelClient
         CancellationToken cancellationToken,
         Action<ReviewStage>? progress = null,
         Action<string>? log = null,
-        Action<ReviewStage, string>? activity = null)
+        Action<ReviewStage, string>? activity = null,
+        Action<TokenUsage?>? usage = null)
     {
         ValidateProfile(profile);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -153,7 +154,8 @@ public sealed class ModelClient
                         tools = GitToolSession.Definitions,
                         tool_choice = "auto",
                         parallel_tool_calls = false,
-                        stream = true
+                        stream = true,
+                        stream_options = new { include_usage = true }
                     })
                 };
                 var apiKey = ResolveApiKey(profile);
@@ -167,7 +169,7 @@ public sealed class ModelClient
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Review API returned {(int)response.StatusCode}. Native tools/tool_calls and tool_choice=auto are required. " +
                         "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.");
-                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken);
+                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage);
                 progress?.Invoke(ReviewStage.Response);
                 var choice = document.RootElement.GetProperty("choices")[0];
                 var finish = choice.GetProperty("finish_reason").GetString();

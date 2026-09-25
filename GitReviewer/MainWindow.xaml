@@ -11,6 +11,38 @@
         </Grid.RowDefinitions>
 
         <TabControl x:Name="MainTabs">
+            <TabItem x:Name="DashboardTab" Header="Dashboard">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="20">
+                        <TextBlock FontSize="20" TextWrapping="Wrap"><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
+                        <TextBlock x:Name="DashboardRepositoryText" Margin="0,8,0,16" TextWrapping="Wrap" Foreground="#555" />
+                        <Border Padding="16" Background="#F3F6FA" CornerRadius="6">
+                            <StackPanel>
+                                <TextBlock><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
+                                <TextBlock x:Name="CommitSubjectTextBlock" Margin="0,8,0,0" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                <TextBlock x:Name="CommitDetailsText" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                <Button x:Name="SetStartCommitButton" Margin="0,12,0,0" HorizontalAlignment="Left" Padding="12,4"
+                                        Content="Start from selected commit" IsEnabled="False" Click="SetStartCommit_Click" />
+                            </StackPanel>
+                        </Border>
+                        <UniformGrid Columns="3" Margin="-4,12,-4,12">
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="CommitTokensText" TextWrapping="Wrap" /></Border>
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="TodayTokensText" TextWrapping="Wrap" /></Border>
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="TotalTokensText" TextWrapping="Wrap" /></Border>
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="RemainingCommitsText" TextWrapping="Wrap" /></Border>
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="ElapsedText" TextWrapping="Wrap" /></Border>
+                            <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="NextRunText" TextWrapping="Wrap" /></Border>
+                        </UniformGrid>
+                        <TextBlock x:Name="UsageNoteText" Foreground="#666" TextWrapping="Wrap" Margin="0,0,0,16" />
+                        <TextBlock x:Name="RecentJournalLabel" Text="Recent journal entries" FontSize="16" FontWeight="SemiBold" />
+                        <ItemsControl x:Name="RecentJournalItems" Margin="0,8,0,0">
+                            <ItemsControl.ItemTemplate><DataTemplate>
+                                <TextBlock Text="{Binding}" Margin="0,4" TextWrapping="Wrap" MaxHeight="72" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate></ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
             <TabItem x:Name="ProjectTab" Header="Project">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <Grid Margin="16">
@@ -192,28 +224,15 @@
 
             <TabItem x:Name="LogTab" Header="Journal">
                 <Grid Margin="16">
-                    <TextBox x:Name="LogTextBox" IsReadOnly="True" FontFamily="Consolas"
+                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                    <Button x:Name="ClearJournalButton" Content="Clear journal" Click="ClearJournal_Click" HorizontalAlignment="Right" Padding="12,6" Margin="0,0,0,10" />
+                    <TextBox x:Name="LogTextBox" Grid.Row="1" IsReadOnly="True" FontFamily="Consolas"
                              TextWrapping="Wrap" AcceptsReturn="True"
                              VerticalScrollBarVisibility="Auto" />
                 </Grid>
             </TabItem>
         </TabControl>
 
-        <Border Grid.Row="1" BorderBrush="#D0D0D0" BorderThickness="0,1,0,0" Margin="0,14,0,0" Padding="0,14,0,0">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0">
-                    <TextBlock><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
-                    <DockPanel Margin="0,4,0,0">
-                        <Button x:Name="SetStartCommitButton" DockPanel.Dock="Right" Margin="12,0,0,0" Padding="12,4"
-                                Content="Start from selected commit" IsEnabled="False" Click="SetStartCommit_Click" />
-                        <TextBlock VerticalAlignment="Center"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
-                    </DockPanel>
-                    <TextBlock x:Name="CommitSubjectTextBlock" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
-                </StackPanel>
                 <WrapPanel Grid.Row="1" Margin="0,10,0,0" HorizontalAlignment="Right">
                     <Button x:Name="OpenLogButton" Padding="12,7" Margin="0,0,8,0" Content="Log" Click="OpenLog_Click" />
                     <Button x:Name="StartButton" Padding="18,7" Margin="0,0,8,0" Content="Start" Click="Start_Click" />
@@ -222,7 +241,5 @@
                     <Button x:Name="HideToTrayButton" Padding="18,7" Margin="0,0,8,0" Content="Hide to tray" Click="HideToTray_Click" />
                     <Button x:Name="ExitButton" Padding="18,7" Content="Exit" Click="Exit_Click" />
                 </WrapPanel>
-            </Grid>
-        </Border>
     </Grid>
 </Window>

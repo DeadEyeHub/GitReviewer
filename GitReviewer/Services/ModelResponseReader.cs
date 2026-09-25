@@ -7,6 +7,12 @@ namespace GitReviewer.Services;
 
 public static class ModelResponseReader
 {
+    private sealed class UsageCapture(Action<TokenUsage?>? notify) : IDisposable
+    {
+        public TokenUsage? Latest { get; private set; }
+        public void Read(JsonElement root) { if (TokenUsage.Parse(root) is { } usage) Latest = usage; }
+        public void Dispose() { try { notify?.Invoke(Latest); } catch { } }
+    }
     public const int ReasoningLimit = 2_000_000;
     public const int ContentLimit = 1_000_000;
     public const int ToolLimit = 256_000;
@@ -30,8 +36,9 @@ public static class ModelResponseReader
         }
     }
 
-    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token)
+    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token, Action<TokenUsage?>? usage = null)
     {
+        using var capturedUsage = new UsageCapture(usage);
         using var stream = await content.ReadAsStreamAsync(token);
         using var reader = new StreamReader(stream);
         var streaming = content.Headers.ContentType?.MediaType == "text/event-stream";
@@ -54,6 +61,7 @@ public static class ModelResponseReader
             if (done) throw new InvalidDataException("Data after SSE completion.");
             if (value == "[DONE]") { done = true; return; }
             using var document = JsonDocument.Parse(value);
+            capturedUsage.Read(document.RootElement);
             if (document.RootElement.TryGetProperty("error", out _)) throw new InvalidDataException("Model stream returned an error; inspect Log.");
             foreach (var choice in document.RootElement.GetProperty("choices").EnumerateArray())
             {
@@ -123,6 +131,7 @@ public static class ModelResponseReader
         if (!streaming)
         {
             var document = JsonDocument.Parse(body.ToString());
+            capturedUsage.Read(document.RootElement);
             try
             {
                 foreach (var choice in document.RootElement.GetProperty("choices").EnumerateArray())

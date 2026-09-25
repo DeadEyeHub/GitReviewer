@@ -15,6 +15,11 @@ public sealed class ReviewRunner
     private Task? _stopTask;
     private bool _manualReviewActive;
     private string _activeCommit = string.Empty;
+    private int _remaining;
+    public event Action<int?>? RemainingChanged;
+    public event Action<DateTimeOffset?>? NextRunChanged;
+    public event Action<(string Repository, string Sha, TokenUsage? Usage)>? UsageReceived;
+    private void SetRemaining(int count) { _remaining = count; Publish(RemainingChanged, (int?)count); }
 
     public event Action<string>? Log;
     public event Action<string>? ModelLog;
@@ -100,6 +105,7 @@ public sealed class ReviewRunner
             repositoryPath = identity.WorkTreeRoot;
             var branch = await _git.ResolveBranchAsync(repositoryPath, settings.BranchRef, cancellationToken);
             var sha = await _git.ResolveCommitAsync(repositoryPath, revision, cancellationToken);
+            SetRemaining(1);
             var result = await AnalyzeAndReportAsync(
                 repositoryPath, identity.CommonGitDirectory, branch, sha, profile.Clone(), true, cancellationToken);
             Complete(repositoryPath, branch, sha, profile, result, true, cancellationToken);
@@ -156,6 +162,8 @@ public sealed class ReviewRunner
                 _stopTask = null;
             }
             StatusChanged?.Invoke(Localization.Text("Stopped", "Остановлено"));
+            Publish(NextRunChanged, (DateTimeOffset?)null);
+            Publish(RemainingChanged, (int?)null);
             completion.SetResult();
         }
     }
@@ -168,6 +176,7 @@ public sealed class ReviewRunner
             try
             {
                 _activeCommit = string.Empty;
+                Publish(RemainingChanged, (int?)null);
                 await RunCycleAsync(settings, profile, cancellationToken);
                 StatusChanged?.Invoke(Localization.Format(
                     "Waiting {0} sec.",
@@ -186,7 +195,9 @@ public sealed class ReviewRunner
                 Log?.Invoke(Localization.Format("Error: {0}", "Ошибка: {0}", exception.Message));
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(settings.PollIntervalSeconds), cancellationToken);
+            Publish(NextRunChanged, (DateTimeOffset?)DateTimeOffset.Now.AddSeconds(settings.PollIntervalSeconds));
+            try { await Task.Delay(TimeSpan.FromSeconds(settings.PollIntervalSeconds), cancellationToken); }
+            finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
         }
     }
 
@@ -240,14 +251,17 @@ public sealed class ReviewRunner
             var advancing = await _git.GetAdvanceCommitsAsync(repositoryPath, localHead, fetchedTarget, cancellationToken);
             if (advancing.Count > 0)
                 await _git.ValidateAdvanceAsync(repositoryPath, branch, localHead, cancellationToken);
+            var replay = new List<string>();
             if (position.PendingStart is not null)
             {
                 if (!await _git.IsAncestorAsync(repositoryPath, position.PendingStart, localHead, cancellationToken))
                     throw new GitException("Selected start commit must be an ancestor of the local branch tip.");
-                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, position.PendingStart, profile, cancellationToken);
-                foreach (var oldSha in await _git.GetCommitsAfterAsync(repositoryPath, position.PendingStart, localHead, cancellationToken))
-                    await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, oldSha, profile, cancellationToken);
+                replay.Add(position.PendingStart);
+                replay.AddRange(await _git.GetCommitsAfterAsync(repositoryPath, position.PendingStart, localHead, cancellationToken));
             }
+            SetRemaining(replay.Count + advancing.Count);
+            foreach (var oldSha in replay)
+                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, oldSha, profile, cancellationToken);
             Publish(Log, Localization.Format("Local baseline {0}; fetched tip {1}; commits to review and advance: {2}.",
                 "Локальная точка старта {0}; полученная вершина {1}; коммитов для проверки и продвижения: {2}.", Short(localHead), Short(fetchedTarget), advancing.Count));
             foreach (var nextSha in advancing)
@@ -269,13 +283,18 @@ public sealed class ReviewRunner
                 "Starting automatic review with selected commit {0}.",
                 "Автоматическая проверка начинается с выбранного коммита {0}.",
                 Short(position.PendingStart)));
+            var pendingCommits = await _git.GetCommitsAfterAsync(repositoryPath, position.PendingStart, pendingHead, cancellationToken);
+            SetRemaining(1 + pendingCommits.Count);
             await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
                 branch, position.PendingStart, profile, cancellationToken);
-            previousCommit = position.PendingStart;
+            foreach (var pendingSha in pendingCommits)
+                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, pendingSha, profile, cancellationToken);
+            return;
         }
         else if (previousCommit is null)
         {
             var initialHead = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
+            SetRemaining(1);
             Log?.Invoke(Localization.Format(
                 "First connection: reviewing current commit {0}.",
                 "Первое подключение: проверяется текущий коммит {0}.",
@@ -288,6 +307,7 @@ public sealed class ReviewRunner
         var head = await _git.GetBranchHeadAsync(repositoryPath, branch, cancellationToken);
         if (head.Equals(previousCommit, StringComparison.Ordinal))
         {
+            SetRemaining(0);
             Publish(Log, Localization.Format("No new commits on {0}; tip {1}.", "Новых коммитов в {0} нет; вершина {1}.", branch, Short(head)));
             return;
         }
@@ -298,6 +318,7 @@ public sealed class ReviewRunner
                 "История изменена: сохраненный коммит не является предком вершины выбранной ветки."));
 
         var commits = await _git.GetCommitsAfterAsync(repositoryPath, previousCommit, head, cancellationToken);
+        SetRemaining(commits.Count);
         Publish(Log, Localization.Format("Found {0} new commits on {1}.", "Найдено новых коммитов: {0}, ветка {1}.", commits.Count, branch));
         foreach (var sha in commits)
             await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory,
@@ -353,7 +374,8 @@ public sealed class ReviewRunner
         {
             var response = await _model.ReviewAsync(profile, tools, branch, _configuration.LoadPrompt(), cancellationToken,
                 stage => Emit(stage, profile, sha), message =>
-                    Publish(ModelLog, message), (stage, detail) => Emit(stage, profile, sha, detail));
+                    Publish(ModelLog, message), (stage, detail) => Emit(stage, profile, sha, detail),
+                usage => Publish(UsageReceived, (repositoryIdentity, sha, usage)));
             Emit(ReviewStage.Parsing, profile, sha);
             result = ReviewParser.Parse(response);
         }
@@ -373,6 +395,7 @@ public sealed class ReviewRunner
         ReviewResult result, bool manual, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        SetRemaining(Math.Max(0, _remaining - 1));
         Emit(ReviewStage.Completed, profile, sha);
         Publish(Reviewed, new CommitReviewed(path, branch, sha, result.Findings.Count,
             result.UnstructuredResponse is not null, result.EmptyDiff, manual));

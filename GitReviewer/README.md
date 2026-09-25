@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.15** uses native model-driven Git tools and requires a
+Version **2.1.16** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -48,9 +48,33 @@ Reports may contain local paths and exception data; inspect them before sharing.
 Forced process termination, power loss and severe runtime failures (for example
 stack overflow or insufficient memory to write a report) cannot be guaranteed to log.
 
-The bottom status area shows the current commit SHA and subject. Long subjects
-are ellipsized; hover to see the full title. A new review clears the previous title
-before loading commit metadata.
+The first tab is the **Dashboard**; status is no longer repeated at the bottom.
+It displays repository/branch, full current SHA, subject, author/date, the remaining
+queue including the current commit, four recent journal entries, elapsed processing
+time for the current attempt, and a countdown to the next automatic cycle. The queue
+is based on the locally discovered tip (after fetch), not a prediction of future
+remote commits. Unknown/loading queue size is shown as a dash. Elapsed time freezes
+on completion, failure or cancellation and restarts for the next attempt. The next-run
+countdown appears during the poll delay, including the delay after a failed cycle;
+during processing it says "After this cycle", and when stopped it shows a dash.
+
+The Dashboard also shows provider-reported token totals for this repository/commit
+(including retries), the current local calendar day, and all reviews since tracking
+was enabled. Input and output tokens are counted from API `usage`, never estimated
+from character counts; repeated input/context is included as reported by the provider.
+Streaming requests set `stream_options.include_usage=true`. A provider that rejects
+that standard option must be configured/upgraded to support it; no silent retry is sent.
+Latest cumulative usage per response is recorded once, including known usage from
+failed/incomplete responses. Requests without usage are counted and explicitly marked
+as unknown/incomplete totals, not zero-cost requests. Counts update after each response
+when usage is available, not per generated token. No historical usage is invented.
+`token-usage.json` in the application data directory persists daily, per-commit and
+all-time totals using an atomic replacement. Corrupt history is preserved and reported,
+not overwritten with zero counters. Totals cover review requests, not connection tests.
+
+**Clear journal** on the Journal tab confirms and clears `journal.log`, its rotated
+copy and the Dashboard's recent entries. New activity may immediately create new
+entries. Reports, token statistics and the separate detailed model log are untouched.
 
 ## Requirements
 
@@ -75,7 +99,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.15-win-x64.exe
+dist\GitReviewer-2.1.16-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
