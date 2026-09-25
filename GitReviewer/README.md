@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.16** uses native model-driven Git tools and requires a
+Version **2.1.17** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -99,7 +99,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.16-win-x64.exe
+dist\GitReviewer-2.1.17-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -255,6 +255,10 @@ validation and stop/error behavior apply. Automatic monitoring continues afterwa
 
 Journal updates tolerate hidden and not-yet-laid-out text fields, including the
 separate details window. Scroll anchors are validated against the current layout.
+
+Streaming model responses accept empty choice/delta trailers and final token usage
+after `finish_reason`. Later generated content, tool calls, conflicting finish
+reasons and missing `[DONE]` still fail the review rather than saving partial results.
 
 ### Native Git Agent
 

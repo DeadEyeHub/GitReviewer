@@ -66,7 +66,20 @@ public static class ModelResponseReader
             foreach (var choice in document.RootElement.GetProperty("choices").EnumerateArray())
             {
                 if (choice.GetProperty("index").GetInt32() != 0) throw new InvalidDataException("Unexpected model choice index.");
-                if (finish is not null) throw new InvalidDataException("Model data after finish_reason.");
+                if (finish is not null)
+                {
+                    // Some compatible servers repeat an empty choice in their usage trailer.
+                    // Never append generated data or change the already accepted finish reason.
+                    if (choice.TryGetProperty("finish_reason", out var trailingReason) &&
+                        trailingReason.ValueKind != JsonValueKind.Null &&
+                        (trailingReason.ValueKind != JsonValueKind.String || trailingReason.GetString() != finish))
+                        throw new InvalidDataException("Conflicting model finish_reason in trailing packet.");
+                    if (choice.TryGetProperty("delta", out var trailingDelta) && !IsEmptyTrailerDelta(trailingDelta))
+                        throw new InvalidDataException("Model data after finish_reason.");
+                    if (choice.TryGetProperty("message", out _))
+                        throw new InvalidDataException("Model message after finish_reason.");
+                    continue;
+                }
                 var delta = choice.GetProperty("delta");
                 foreach (var field in new[] { "content", "reasoning", "reasoning_content" })
                     if (delta.TryGetProperty(field, out var part) && part.ValueKind != JsonValueKind.Null)
@@ -186,6 +199,24 @@ public static class ModelResponseReader
                 ["message"] = message
             })
         }.ToJsonString());
+    }
+
+    private static bool IsEmptyTrailerDelta(JsonElement delta)
+    {
+        if (delta.ValueKind == JsonValueKind.Null) return true;
+        if (delta.ValueKind != JsonValueKind.Object) return false;
+        foreach (var field in delta.EnumerateObject())
+        {
+            if (field.Value.ValueKind == JsonValueKind.Null) continue;
+            if (field.Name == "role" && field.Value.ValueKind == JsonValueKind.String &&
+                field.Value.GetString() == "assistant") continue;
+            if (field.Name is "content" or "reasoning" or "reasoning_content" &&
+                field.Value.ValueKind == JsonValueKind.String && field.Value.GetString() == "") continue;
+            if (field.Name == "tool_calls" && field.Value.ValueKind == JsonValueKind.Array &&
+                field.Value.GetArrayLength() == 0) continue;
+            return false;
+        }
+        return true;
     }
 
     private static void LogReturnedMessage(JsonElement root, Action<string>? log)
