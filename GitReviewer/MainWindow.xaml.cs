@@ -70,7 +70,16 @@ public partial class MainWindow : Window
             Dispatch(() => SetStatus("Git fetch | " + message));
         };
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
-        _runner.CommitChanged += commit => Dispatch(() => CommitRun.Text = commit);
+        _runner.CommitChanged += commit =>
+        {
+            CrashDiagnostics.Context = $"Repository: {_repositoryPath}; branch: {_selectedBranch}; commit: {commit}";
+            Dispatch(() => { CommitRun.Text = commit; CommitSubjectTextBlock.Text = string.Empty; CommitSubjectTextBlock.ToolTip = null; });
+        };
+        _runner.CommitInfoChanged += commit => Dispatch(() =>
+        {
+            CommitSubjectTextBlock.Text = commit.Subject;
+            CommitSubjectTextBlock.ToolTip = commit.Subject;
+        });
         _runner.Progress += AppendProgress;
         _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
         _logTimer.Tick += (_, _) => RefreshLogs();
@@ -861,6 +870,7 @@ public partial class MainWindow : Window
             var revision = CommitShaTextBox.Text.Trim();
             var sha = await _git.ResolveCommitAsync(repositoryPath, revision, CancellationToken.None);
             var head = await _git.GetBranchHeadAsync(repositoryPath, branch, CancellationToken.None);
+            var commitInfo = await _git.GetCommitInfoAsync(repositoryPath, sha, CancellationToken.None);
             if (!await _git.IsAncestorAsync(repositoryPath, sha, head, CancellationToken.None))
                 throw new InvalidOperationException(Localization.Text(
                     "The selected commit is not an ancestor of the selected branch tip.",
@@ -872,6 +882,8 @@ public partial class MainWindow : Window
                     "Выбор репозитория изменился. Выберите стартовый коммит снова."));
             await _stateStore.SetStartCommitAsync(repositoryIdentity, branch, sha, CancellationToken.None);
             CommitRun.Text = sha[..8];
+            CommitSubjectTextBlock.Text = commitInfo.Subject;
+            CommitSubjectTextBlock.ToolTip = commitInfo.Subject;
             AppendLog(Localization.Format(
                 "Automatic review will start with commit {0} on {1}.",
                 "Автоматическая проверка начнется с коммита {0} в {1}.",

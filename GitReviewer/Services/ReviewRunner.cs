@@ -20,6 +20,7 @@ public sealed class ReviewRunner
     public event Action<string>? ModelLog;
     public event Action<string>? StatusChanged;
     public event Action<string>? CommitChanged;
+    public event Action<CommitInfo>? CommitInfoChanged;
     public event Action<ReviewProgress>? Progress;
     public event Action<CommitReviewed>? Reviewed;
     public bool IsRunning
@@ -344,6 +345,7 @@ public sealed class ReviewRunner
         Emit(ReviewStage.Started, profile, sha);
 
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
+        Publish(CommitInfoChanged, commit);
         Emit(ReviewStage.PreparingDiff, profile, sha);
         using var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken);
         var result = new ReviewResult { EmptyDiff = await tools.IsEmptyAsync(cancellationToken) };

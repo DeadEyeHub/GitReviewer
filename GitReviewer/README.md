@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.13** uses native model-driven Git tools and requires a
+Version **2.1.14** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -34,6 +34,24 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Records each model-driven Git command with its arguments, exit codes, captured output, and errors in the detailed log.
 - Requests a tray notification for each completed manual or automatic commit review, including no findings.
 
+## Crash diagnostics
+
+Unhandled WPF dispatcher, AppDomain, Windows Forms thread and unobserved task
+exceptions are recorded in separate `crashes/crash-*.log` files under the application
+data directory (by default `%LOCALAPPDATA%/GitReviewer`). Reports include time,
+application/runtime version, exception type/message, stack and inner exceptions,
+plus the last review context. UI fatal errors show the report path and are not
+silently ignored; the process terminates rather than continuing uncertain review state.
+Unobserved task exceptions are logged when the runtime raises that event.
+If the main directory is unwritable, reports fall back to `%TEMP%/GitReviewer-crashes`.
+Reports may contain local paths and exception data; inspect them before sharing.
+Forced process termination, power loss and severe runtime failures (for example
+stack overflow or insufficient memory to write a report) cannot be guaranteed to log.
+
+The bottom status area shows the current commit SHA and subject. Long subjects
+are ellipsized; hover to see the full title. A new review clears the previous title
+before loading commit metadata.
+
 ## Requirements
 
 - Windows 10 or Windows 11
@@ -57,7 +75,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.13-win-x64.exe
+dist\GitReviewer-2.1.14-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
