@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.11** uses native model-driven Git tools and requires a
+Version **2.1.12** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -57,7 +57,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.11-win-x64.exe
+dist\GitReviewer-2.1.12-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -190,8 +190,9 @@ passphrase or an HTTPS token itself.
 ## Review Behavior
 
 On the first connection, only the selected branch tip is reviewed against its first
-parent. Earlier commits are not automatically sent to the model; the model may
-request ancestor history as context. After that, the last
+parent. The model can access only the reviewed SHA and its immediate first parent,
+not older history. Local-branch fetch mode instead starts with incoming commits
+after the current local tip, as described under Branch Selection. After review, the last
 successfully reviewed SHA is stored in `state.json`, and only newer commits are
 processed.
 
@@ -216,11 +217,10 @@ sequentially, even though parallel tool calls are disabled in requests.
 
 | Tool | Scope |
 | --- | --- |
-| `git_metadata` | Commit metadata and parents for the target or a discovered full SHA |
-| `git_history` | Up to 20 structured commit records (SHA, parents, subject); optional file `path` follows renames and returns change statuses and old/new paths |
+| `git_metadata` | Metadata for the target or its immediate first parent; mentioned SHAs grant no additional access |
 | `git_changed_files` | Paginated names/status against the target's first parent |
 | `git_diff` | Paginated full target patch, root commits compared with the empty tree |
-| `git_file` | Paginated committed blob, optionally an inclusive numbered `start_line`/`end_line` range |
+| `git_file` | Committed blob as paginated text/numbered line range, or original bytes with `format: "hex"` |
 | `git_tree` | Paginated directory children at an allowed SHA; optional directory `path` and `recursive` (default false) |
 | `git_search` | Paginated case-sensitive literal `query` matches; optional file/directory `path`; skips binary files |
 
@@ -242,23 +242,33 @@ empty result. Tree/search output and numbered ranges are cached for stable pagin
 on disk and share the session disk budget with diffs. Keep the same path/query/range when
 following `next_offset`.
 
+For byte-level questions, `git_file` accepts `format: "hex"`, `byte_offset`
+(default 0, nonnegative 32-bit position) and `byte_count` (default 256, maximum 4096).
+The result includes uppercase `hex`, `blob_size_bytes`, `bytes_returned`,
+`next_byte_offset` and `bom` (`UTF-8`, `UTF-16LE/BE`, `UTF-32LE/BE`, or `none`).
+Bytes come directly from Git stdout's binary stream, without shell redirection,
+text decoding, BOM removal or newline conversion. BOM is a signature, not validation
+of the full encoding; `none` does not mean UTF-8. Byte offsets are independent from
+text pagination. Combining hex with text `offset` or line bounds is rejected.
+Reading at EOF returns an empty range; beyond EOF is rejected. Requests are bounded
+and may seek to a specific byte range without reading prior pages through the model.
+
 Refs such as `HEAD`, arbitrary revision expressions, paths outside the Git tree,
-and user-supplied Git flags are not accepted by tools. Only the target, its parents,
-and full SHAs discovered through bounded history/metadata are allowed (at most
-1024 remembered SHAs). As with manual SHA input, repositories currently use
+and user-supplied Git flags are not accepted by tools. Only the target and its
+immediate first parent are allowed. `git_history` is no longer offered or executable.
+Metadata cannot expand this allowlist: older ancestors and other merge parents
+remain prohibited even when their SHAs appear in output. As with manual SHA input, repositories use
 40-character SHA-1 object IDs; SHA-256 repositories are not supported.
-Only structural SHA/parent fields discovered by history authorize further reads;
-hash-like text in subjects or filenames does not. File history reports additions,
-modifications, deletions and detected renames. Rename detection uses 50% similarity
-and is heuristic; bounded/shallow history and merge simplification may omit changes.
 Subjects are navigation hints, not evidence. Start with the reviewed diff and relevant
-files at the reviewed SHA and its immediate first parent. Consult older history only
-to answer a specific unresolved question about origins, contracts or renamed files.
+files at the reviewed SHA and its immediate first parent. Report confirmed issues
+relevant to the change without investigating bug age, authorship or its originating
+commit. Unrelated pre-existing bugs are outside the review. The mandatory protocol
+overrides older/custom prompts that still request history exploration.
 
 When `git_file` requests a path absent from an available commit tree, it returns
-`status: "not_found"` with the requested SHA/path and suggestions to inspect tree/file
-history. This normal result does not abort review or substitute working-copy contents.
-It also applies to numbered-range reads. The journal reports that investigation
+`status: "not_found"` with the requested SHA/path and suggestions to inspect the tree
+at the target or first parent. This does not abort review or substitute working-copy contents.
+It also applies to numbered-range and hex reads. The journal reports that investigation
 continues. An existing tree entry with an unreadable/missing blob, unavailable commit,
 damaged tree or timeout remains a failure, not an absent-path result.
 Changing the selected branch or dirty checkout cannot

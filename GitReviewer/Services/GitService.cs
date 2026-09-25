@@ -345,11 +345,15 @@ public sealed class GitService
 
     internal static Task<GitResult> CaptureSnapshotAsync(string repositoryPath, Stream destination, int characterLimit,
         CancellationToken token, Action<GitCommandTrace>? trace, params string[] arguments) =>
-        RunCoreAsync(repositoryPath, null, token, (0, characterLimit), trace, destination, arguments);
+        RunCoreAsync(repositoryPath, null, token, (0, characterLimit), trace, destination, false, arguments);
+
+    internal static Task<GitResult> ReadBytesAsync(string repositoryPath, int offset, int limit,
+        CancellationToken token, Action<GitCommandTrace>? trace, params string[] arguments) =>
+        RunCoreAsync(repositoryPath, null, token, (offset, limit), trace, null, true, arguments);
 
     private static Task<GitResult> RunCoreAsync(string repositoryPath, AppSettings? settings,
         CancellationToken token, (int Offset, int Limit)? page, Action<GitCommandTrace>? trace, params string[] arguments) =>
-        RunCoreAsync(repositoryPath, settings, token, page, trace, null, arguments);
+        RunCoreAsync(repositoryPath, settings, token, page, trace, null, false, arguments);
 
     private static async Task<GitResult> RunCoreAsync(
         string repositoryPath,
@@ -358,6 +362,7 @@ public sealed class GitService
         (int Offset, int Limit)? page,
         Action<GitCommandTrace>? trace,
         Stream? snapshotDestination,
+        bool rawBytes,
         params string[] arguments)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -547,7 +552,37 @@ public sealed class GitService
                     throw;
                 }
             }
-            var outputTask = snapshotDestination is not null ? CaptureAsync() : isFetch ? ReadTransferAsync(process.StandardOutput, false)
+            async Task<string> ReadRawAsync()
+            {
+                try
+                {
+                    var skip = page!.Value.Offset;
+                    var bytes = new byte[page.Value.Limit + 1];
+                    var scratch = new byte[4096];
+                    while (skip > 0)
+                    {
+                        var read = await process.StandardOutput.BaseStream.ReadAsync(scratch.AsMemory(0, Math.Min(skip, scratch.Length)), token);
+                        if (read == 0) throw new GitException("Git blob ended before the requested byte offset.");
+                        skip -= read;
+                    }
+                    var count = 0;
+                    while (count < bytes.Length)
+                    {
+                        var read = await process.StandardOutput.BaseStream.ReadAsync(bytes.AsMemory(count), token);
+                        if (read == 0) break;
+                        count += read;
+                    }
+                    more = count > page.Value.Limit;
+                    if (more && !process.HasExited) process.Kill(true);
+                    return Convert.ToHexString(bytes.AsSpan(0, Math.Min(count, page.Value.Limit)));
+                }
+                catch
+                {
+                    if (!process.HasExited) process.Kill(true);
+                    throw;
+                }
+            }
+            var outputTask = rawBytes ? ReadRawAsync() : snapshotDestination is not null ? CaptureAsync() : isFetch ? ReadTransferAsync(process.StandardOutput, false)
                 : ReadBoundedAsync(process.StandardOutput, page?.Offset ?? 0, page?.Limit ?? 4_000_000, page is not null);
             var errorTask = isFetch ? ReadTransferAsync(process.StandardError, true)
                 : ReadBoundedAsync(process.StandardError, 0, 16_000, false);
