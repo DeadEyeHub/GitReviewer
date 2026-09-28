@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.17** uses native model-driven Git tools and requires a
+Version **2.1.18** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -99,7 +99,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.17-win-x64.exe
+dist\GitReviewer-2.1.18-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -375,7 +375,9 @@ but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
 with replacement for invalid bytes, not a binary download API.
 
 Budgets per review: 60 model rounds, 64 tool calls, 512,000 serialized tool-result
-characters, and a 10-minute overall agent deadline. Requests 41–60 include a fresh
+characters, and a 15-minute overall agent deadline. The Dashboard displays the
+remaining agent time beside elapsed commit time; timeout errors explicitly name
+the 15-minute limit, while user cancellation remains cancellation. Requests 41–60 include a fresh
 budget reminder counting remaining model requests including the current request
 (20 down to 1), with instructions to reserve a final report. Old reminders are not
 accumulated in conversation history. Evidence/completeness requirements remain unchanged.

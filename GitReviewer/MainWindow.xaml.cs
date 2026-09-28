@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private LogWindow? _logWindow;
     private readonly TokenUsageStore _tokenUsage = new(Path.Combine(AppPaths.DataDirectory, "token-usage.json"));
     private readonly System.Diagnostics.Stopwatch _commitClock = new();
+    private readonly System.Diagnostics.Stopwatch _agentClock = new();
     private DateTimeOffset? _nextAutomaticRun;
     private int? _remainingCommits;
     private string? _usageCommitKey;
@@ -1193,6 +1194,9 @@ public partial class MainWindow : Window
         RemainingCommitsText.Text = Localization.Text("Commits remaining (incl. current)\n", "Коммитов осталось (с текущим)\n") + (_remainingCommits?.ToString() ?? "—");
         static string Duration(TimeSpan time) => $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}";
         ElapsedText.Text = Localization.Text("Commit processing time\n", "Время обработки коммита\n") + Duration(_commitClock.Elapsed);
+        var remaining = ModelClient.ReviewTimeLimit - _agentClock.Elapsed;
+        ElapsedText.Text += Localization.Text("\nUntil review timeout: ", "\nДо лимита проверки: ") +
+            (_agentClock.IsRunning ? Duration(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero) : "—");
         NextRunText.Text = Localization.Text("Next automatic check\n", "До следующего автозапуска\n") +
             (_nextAutomaticRun is { } next ? Duration(next > now ? next - now : TimeSpan.Zero) :
                 _runner.IsRunning ? Localization.Text("After this cycle", "После текущего цикла") : "—");
@@ -1258,11 +1262,18 @@ public partial class MainWindow : Window
             if (progress.Stage == ReviewStage.Started)
             {
                 _commitClock.Restart();
+                _agentClock.Reset();
                 CommitDetailsText.Text = string.Empty;
                 var repository = string.IsNullOrWhiteSpace(_repositoryCommonGitDirectory) ? _repositoryPath : _repositoryCommonGitDirectory;
                 _usageCommitKey = string.IsNullOrWhiteSpace(repository) ? null : TokenUsageStore.Key(repository, progress.Commit);
             }
-            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled) _commitClock.Stop();
+            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled)
+            {
+                _commitClock.Stop();
+                _agentClock.Stop();
+            }
+            else if (progress.Stage == ReviewStage.AgentStarted) _agentClock.Restart();
+            else if (progress.Stage == ReviewStage.Parsing) _agentClock.Stop();
         });
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
@@ -1284,6 +1295,7 @@ public partial class MainWindow : Window
             ReviewStage.FormatCorrection => Localization.Text("Requesting report format correction", "Запрошено исправление формата отчёта"),
             ReviewStage.Report => Localization.Text("Saving review report", "Сохранение отчёта проверки"),
             ReviewStage.Completed => Localization.Text("Commit review completed", "Проверка коммита завершена"),
+            ReviewStage.AgentStarted => Localization.Text("Review timer started (15 minutes)", "Таймер проверки запущен (15 минут)"),
             ReviewStage.Failed => Localization.Text("Commit review failed", "Ошибка проверки коммита"),
             ReviewStage.Canceled => Localization.Text("Commit review canceled", "Проверка коммита отменена"),
             _ => progress.Stage.ToString()

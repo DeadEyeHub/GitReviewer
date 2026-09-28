@@ -9,6 +9,7 @@ namespace GitReviewer.Services;
 
 public sealed class ModelClient
 {
+    public static readonly TimeSpan ReviewTimeLimit = TimeSpan.FromMinutes(15);
     private readonly HttpClient _httpClient;
 
     public ModelClient(HttpClient? httpClient = null) =>
@@ -82,9 +83,11 @@ public sealed class ModelClient
         Action<TokenUsage?>? usage = null)
     {
         ValidateProfile(profile);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(TimeSpan.FromMinutes(10));
+        var callerToken = cancellationToken;
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
+        deadline.CancelAfter(ReviewTimeLimit);
         cancellationToken = deadline.Token;
+        progress?.Invoke(ReviewStage.AgentStarted);
         if (systemPrompt.Length > 32_000 || branch.Length > 4096)
             throw new InvalidDataException("Review instructions or branch context exceed input limits.");
         const string protocol = """
@@ -304,6 +307,14 @@ public sealed class ModelClient
                 return content;
             }
             throw new InvalidDataException("Git agent round budget exhausted: 60 of 60 model requests used; review incomplete.");
+        }
+        catch (OperationCanceledException exception) when (!callerToken.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            var message = Localization.Text(
+                "Commit review timed out after 15 minutes; review is incomplete.",
+                "Превышено время проверки коммита: 15 минут. Проверка не завершена.");
+            log?.Invoke("Git agent: " + message);
+            throw new TimeoutException(message, exception);
         }
         catch (OperationCanceledException) { log?.Invoke("Git agent: canceled"); throw; }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException)

@@ -50,7 +50,7 @@ public sealed class RepositoryReviewState
         new(StringComparer.Ordinal);
 }
 
-public enum ReviewStage { Started, PreparingDiff, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled, Tool, ToolRejected, FormatCorrection }
+public enum ReviewStage { Started, PreparingDiff, Request, Waiting, Response, Parsing, Report, SavingCursor, Completed, Failed, Canceled, Tool, ToolRejected, FormatCorrection, AgentStarted }
 
 public sealed record ReviewProgress(ReviewStage Stage, string Model, string Commit, string Detail = "");
 
