@@ -131,41 +131,8 @@ public sealed class ConfigurationStore
         File.WriteAllText(AppPaths.ModelsConfig, text.ToString(), Encoding.UTF8);
     }
 
-    public string LoadPrompt() => File.Exists(AppPaths.SystemPrompt)
-        ? File.ReadAllText(AppPaths.SystemPrompt, Encoding.UTF8)
-        : string.Empty;
-
-    public void SavePrompt(string prompt) =>
-        File.WriteAllText(AppPaths.SystemPrompt, prompt, Encoding.UTF8);
-
-    public void RestoreDefaultPrompt(string language)
-    {
-        var templateName = language.Equals("ru", StringComparison.OrdinalIgnoreCase)
-            ? "system-prompt.ru.example.txt"
-            : "system-prompt.example.txt";
-        File.WriteAllText(
-            AppPaths.SystemPrompt,
-            AppPaths.ReadTemplate(templateName),
-            Encoding.UTF8);
-    }
-
-    public bool SwitchDefaultPromptLanguage(string language, string editorPrompt)
-    {
-        if (!File.Exists(AppPaths.SystemPrompt))
-            return false;
-        var current = NormalizePrompt(editorPrompt);
-        var matchesDefault = new[] { "system-prompt.example.txt", "system-prompt.ru.example.txt" }
-            .Select(name => NormalizePrompt(AppPaths.ReadTemplate(name)))
-            .Any(prompt => prompt.Equals(current, StringComparison.Ordinal));
-        if (!matchesDefault)
-            return false;
-
-        RestoreDefaultPrompt(language);
-        return true;
-    }
-
-    private static string NormalizePrompt(string prompt) =>
-        prompt.Replace("\r\n", "\n").Trim();
+    public string LoadPrompt() => AppPaths.ReadTemplate(Localization.Language == "ru"
+        ? "system-prompt.ru.example.txt" : "system-prompt.example.txt");
 
     private static IEnumerable<(string Key, string Value)> ReadSimpleValues(string path)
     {

@@ -195,8 +195,7 @@ public partial class MainWindow : Window
         var settings = _configuration.LoadSettings();
         settings.Language = option.Code;
         _configuration.SaveSettings(settings);
-        if (_configuration.SwitchDefaultPromptLanguage(option.Code, PromptTextBox.Text))
-            PromptTextBox.Text = _configuration.LoadPrompt();
+        PromptTextBox.Text = _configuration.LoadPrompt();
         ApplyLanguage();
     }
 
@@ -265,9 +264,6 @@ public partial class MainWindow : Window
             "Укажите базовый URL /v1, /v1/models или полный URL /chat/completions. API-ключ необязателен.");
         UpdateModelLength();
         UpdateModelEndpointWarning();
-        SavePromptButton.Content = Localization.Text("Save", "Сохранить");
-        ReloadPromptButton.Content = Localization.Text("Reload", "Перечитать");
-        RestorePromptButton.Content = Localization.Text("Restore default", "Вернуть стандартный");
 
         StatusLabelRun.Text = Localization.Text("Status: ", "Статус: ");
         CurrentCommitLabelRun.Text = Localization.Text("Current commit: ", "Текущий коммит: ");
@@ -788,29 +784,6 @@ public partial class MainWindow : Window
         };
     }
 
-    private void SavePrompt_Click(object sender, RoutedEventArgs e)
-    {
-        _configuration.SavePrompt(PromptTextBox.Text);
-        AppendLog(Localization.Text("System prompt saved.", "Системный промпт сохранен."));
-    }
-
-    private void ReloadPrompt_Click(object sender, RoutedEventArgs e) =>
-        PromptTextBox.Text = _configuration.LoadPrompt();
-
-    private void RestorePrompt_Click(object sender, RoutedEventArgs e)
-    {
-        if (System.Windows.MessageBox.Show(Localization.Text(
-                "Restore the default system prompt?",
-                "Вернуть стандартный системный промпт?"), "Git Reviewer",
-                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-            return;
-        _configuration.RestoreDefaultPrompt(Localization.Language);
-        PromptTextBox.Text = _configuration.LoadPrompt();
-        AppendLog(Localization.Text(
-            "Default system prompt restored.",
-            "Стандартный системный промпт восстановлен."));
-    }
-
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)
     {
         if (_exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
@@ -822,7 +795,6 @@ public partial class MainWindow : Window
             var profile = ReadProfileFromForm();
             var revision = CommitShaTextBox.Text.Trim();
             _configuration.SaveSettings(settings);
-            _configuration.SavePrompt(PromptTextBox.Text);
             ReviewCommitButton.IsEnabled = false;
             StartButton.IsEnabled = false;
             _trayStartItem.Enabled = false;
@@ -963,7 +935,6 @@ public partial class MainWindow : Window
             var settings = ReadSettingsFromForm();
             var profile = ReadProfileFromForm();
             _configuration.SaveSettings(settings);
-            _configuration.SavePrompt(PromptTextBox.Text);
 
             var existing = _models.Profiles.FirstOrDefault(item =>
                 item.Name.Equals(profile.Name, StringComparison.OrdinalIgnoreCase));

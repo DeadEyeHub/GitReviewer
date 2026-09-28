@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.19** uses native model-driven Git tools and requires a
+Version **2.1.20** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -26,7 +26,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
   SHA manually. The same selection is used for manual review and automatic start.
 - Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
-- Uses an editable system prompt and a simple text response format instead of model-generated JSON.
+- Uses an embedded, versioned system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
 - Continues monitoring in the Windows system tray after the main window is closed.
 - Writes findings to a Markdown report with commit, file, and line information.
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.19-win-x64.exe
+dist\GitReviewer-2.1.20-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -396,7 +396,7 @@ The raw HTTP/SSE transport limit is 128,000,000 characters including JSON overhe
 SSE is processed incrementally. Errors identify the exhausted category, received
 count and limit. Git-result budgets and context-window limits are unchanged.
 Each tool subprocess has a 30-second timeout and bounded stderr.
-Custom prompts are capped at 32,000 characters. Cancellation kills Git process
+System prompts are capped at 32,000 characters. Cancellation kills Git process
 trees and cancels HTTP work. Invalid arguments and unknown tools produce safe
 error results for correction within the same budgets. Once arguments are valid,
 a Git retrieval failure (including an unavailable blob, but not a confirmed absent path) is
@@ -413,7 +413,7 @@ serialized tool-result character budget. Model budgets are fixed, not inferred f
 Empty changes are detected locally and reported honestly as not sent to the model.
 Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.
 Protocol/safety instructions are always added by the client regardless of the
-editable prompt. A single initial system message combines the custom prompt,
+embedded prompt. A single initial system message combines the embedded prompt,
 then the mandatory overriding protocol and language instruction, for compatibility
 with tool-capable Mistral/vLLM chat templates. Git content and branch context are explicitly untrusted data,
 not commands or instructions. This reduces prompt-injection risk but cannot
@@ -553,8 +553,8 @@ cover path persistence, shell-safe custom paths, blank-path detection, missing
 paths, and background fetch. In-flight manual and automatic model requests are
 also checked for clean cancellation without completion notifications. This local
 test project is ignored and is not included in the production distribution.
-The second command checks production prompt seeding, exact legacy EN/RU migration,
-and preservation of customized prompts in an isolated local data directory.
+The second command checks embedded EN/RU prompt loading and verifies that legacy
+prompt files are ignored and preserved, including read-only files.
 The WPF project can be built on Linux with `dotnet build`, but running and
 interactively checking the GUI and tray notifications requires Windows.
 
@@ -574,7 +574,6 @@ The directory contains:
 ```text
 models.conf          Model profiles and optional API keys
 settings.conf        Repository, branch ref, authentication, interval, fetch, language
-system-prompt.txt    Editable system prompt
 state.json           Last reviewed commit for each repository and branch
 reports\             Markdown review reports
 ```
@@ -587,11 +586,9 @@ Select English or Russian on the **Project** tab. The choice is saved in
 `settings.conf` and applies to the GUI, tray menu, log messages, reports, and
 model instructions.
 
-If the system prompt still matches one of the default templates, switching the
-language switches the prompt automatically. A customized prompt is never
-overwritten by language switching.
-
-On upgrade, exact shipped pre-2.0 English/Russian default prompts are migrated to
-the new tool-aware defaults. Customized persisted prompts are preserved. The
-client's mandatory protocol explains that older references to a supplied diff
-now mean the diff retrieved through tools; users can restore defaults explicitly.
+System prompts are embedded in the executable from `GitReviewer/system-prompt.example.txt`
+and `GitReviewer/system-prompt.ru.example.txt`. Updating the application therefore
+updates the prompt automatically. Language switching selects the matching embedded
+text. The System prompt tab is read-only; edit the source templates and rebuild to
+change it. Legacy `system-prompt.txt` files in AppData are ignored, never rewritten
+or deleted, and no new prompt file is created there.

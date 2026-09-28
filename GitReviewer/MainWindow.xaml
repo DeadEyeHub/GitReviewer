@@ -225,14 +225,9 @@
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <TextBox x:Name="PromptTextBox" Grid.Row="0" AcceptsReturn="True" AcceptsTab="True"
+                    <TextBox x:Name="PromptTextBox" Grid.Row="0" IsReadOnly="True" AcceptsReturn="True" AcceptsTab="True"
                              FontFamily="Consolas" FontSize="14" TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
-                        <Button x:Name="SavePromptButton" Padding="16,6" Margin="0,0,8,0" Content="Save" Click="SavePrompt_Click" />
-                        <Button x:Name="ReloadPromptButton" Padding="16,6" Margin="0,0,8,0" Content="Reload" Click="ReloadPrompt_Click" />
-                        <Button x:Name="RestorePromptButton" Padding="16,6" Content="Restore default" Click="RestorePrompt_Click" />
-                    </StackPanel>
                 </Grid>
             </TabItem>
 
