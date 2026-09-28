@@ -105,6 +105,11 @@ public sealed class ConfigurationStore
                 case "model": current.Model = value; break;
                 case "api_key": current.ApiKey = value; break;
                 case "api_key_environment": current.ApiKeyEnvironment = value; break;
+                case "parameters":
+                    current.Parameters = System.Text.Json.JsonSerializer.Deserialize<ModelParameters>(value)
+                        ?? throw new InvalidDataException("Invalid model parameters.");
+                    current.Parameters.Validate();
+                    break;
             }
         }
 
@@ -113,6 +118,7 @@ public sealed class ConfigurationStore
 
     public void SaveModels(ModelsConfiguration configuration)
     {
+        foreach (var profile in configuration.Profiles) profile.Parameters.Validate();
         var text = new StringBuilder()
             .AppendLine("# Local model profiles. This file must not be committed.")
             .AppendLine($"active={configuration.ActiveProfile}")
@@ -125,6 +131,7 @@ public sealed class ConfigurationStore
                 .AppendLine($"model={profile.Model}")
                 .AppendLine($"api_key={profile.ApiKey}")
                 .AppendLine($"api_key_environment={profile.ApiKeyEnvironment}")
+                .AppendLine($"parameters={System.Text.Json.JsonSerializer.Serialize(profile.Parameters)}")
                 .AppendLine();
         }
 

@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.20** uses native model-driven Git tools and requires a
+Version **2.2.1** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.20-win-x64.exe
+dist\GitReviewer-2.2.1-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -381,10 +381,10 @@ directory rather than enumerating the entire repository. Binary diff markers are
 but binary semantics are not analyzed reliably; blob text uses UTF-8 decoding
 with replacement for invalid bytes, not a binary download API.
 
-Budgets per review: 60 model rounds, 64 tool calls, 512,000 serialized tool-result
+Default budgets per review: 60 model rounds, 64 tool calls, 512,000 serialized tool-result
 characters, and a 15-minute overall agent deadline. The Dashboard displays the
 remaining agent time beside elapsed commit time; timeout errors explicitly name
-the 15-minute limit, while user cancellation remains cancellation. Requests 41–60 include a fresh
+the configured limit, while user cancellation remains cancellation. By default requests 41–60 include a fresh
 budget reminder counting remaining model requests including the current request
 (20 down to 1), with instructions to reserve a final report. Old reminders are not
 accumulated in conversation history. Evidence/completeness requirements remain unchanged.
@@ -408,7 +408,38 @@ cursor advancement, or completion notification is produced for those failures.
 Large commits may therefore require a different workflow instead of being
 silently reviewed only in part. The model-output budget is separate from snapshot
 storage: increasing disk capacity does not increase model context or the 512,000
-serialized tool-result character budget. Model budgets are fixed, not inferred from model metadata.
+serialized tool-result character budget. Model budgets are configured per profile,
+not inferred from model metadata.
+
+### Model parameters
+
+The **Models** tab contains an editable parameters table with permitted ranges.
+Each visible row has a question-mark tooltip explaining its purpose, units and
+effect in the selected UI language. Maximum output tokens and Git snapshot size
+are not shown in the table; existing profile values are preserved when saving
+other settings, and new profiles use their defaults.
+Click **Save** to persist values in the profile's `parameters=` JSON entry in
+`models.conf`. Existing profiles without this entry retain the defaults above.
+Each review takes its own copy: editing a profile does not alter an active review.
+
+| Parameter | Default |
+|---|---:|
+| Review time (minutes) | 15 |
+| Temperature / Top P | 0 / 1 |
+| Maximum output tokens (`max_tokens`) | 0: omit, use server default |
+| Model request rounds | 60 |
+| Start reminders when this many requests remain | 20 |
+| Tool calls per review | 64 |
+| Tool-result characters per review | 512000 |
+| Reasoning / content / tool-argument characters per response | 2000000 / 1000000 / 256000 |
+| Raw HTTP response characters | 128000000 |
+| Git snapshot disk budget (MiB) | 0: environment or 64 MiB default |
+
+Temperature, Top P and an optional maximum token count are sent to the server;
+provider support and its context limit still apply. Reminders, protocol budget
+text, timeout messages and the Dashboard timer reflect the configured values.
+Internal safety limits (Git subprocess timeout, page sizes, allowed commits and
+path restrictions) are not model-generation settings and remain unchanged.
 
 Empty changes are detected locally and reported honestly as not sent to the model.
 Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.

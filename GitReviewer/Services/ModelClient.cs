@@ -84,13 +84,15 @@ public sealed class ModelClient
     {
         ValidateProfile(profile);
         var callerToken = cancellationToken;
+        var parameters = profile.Parameters.Clone();
+        parameters.Validate();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
-        deadline.CancelAfter(ReviewTimeLimit);
+        deadline.CancelAfter(TimeSpan.FromMinutes(parameters.ReviewMinutes));
         cancellationToken = deadline.Token;
         progress?.Invoke(ReviewStage.AgentStarted);
         if (systemPrompt.Length > 32_000 || branch.Length > 4096)
             throw new InvalidDataException("Review instructions or branch context exceed input limits.");
-        const string protocol = """
+        var protocol = """
             Mandatory review protocol (takes precedence over custom review preferences):
             Independently inspect the immutable reviewed SHA using native Git tools. No diff is supplied automatically.
             Investigation order: first read the full reviewed diff, then relevant files at the reviewed SHA and its immediate first parent.
@@ -125,6 +127,8 @@ public sealed class ModelClient
             END
             Use OLD for deleted lines and HUNK with the nearest line if the exact location is uncertain.
             """;
+        protocol = protocol.Replace("60 model rounds, 64 tool calls, 512000 tool-result characters",
+            $"{parameters.MaxRounds} model rounds, {parameters.MaxToolCalls} tool calls, {parameters.ToolOutputLimit} tool-result characters");
         var messages = new List<object>
         {
             new { role = "system", content = systemPrompt + "\n\n" + protocol + "\n" + Localization.Text("Write descriptions in English.", "Пиши описания на русском языке.") },
@@ -137,29 +141,32 @@ public sealed class ModelClient
         log?.Invoke("Git agent: started");
         try
         {
-            for (var round = 0; round < 60; round++)
+            for (var round = 0; round < parameters.MaxRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 // Reminders belong to the outgoing request, not the persistent conversation.
                 var requestMessages = messages.ToList();
-                if (round >= 40)
+                if (parameters.MaxRounds - round <= parameters.ReminderRequests)
                     requestMessages.Add(new { role = "user", content =
-                        $"Review budget reminder: {60 - round} model requests remain INCLUDING this request (request {round + 1} of 60). " +
+                        $"Review budget reminder: {parameters.MaxRounds - round} model requests remain INCLUDING this request (request {round + 1} of {parameters.MaxRounds}). " +
                         "Prioritize essential evidence and reserve a response for the final report. " +
                         "The last request must return the final report, not new tool calls. Never claim completion without the full diff or required evidence." });
                 using var request = new HttpRequestMessage(HttpMethod.Post, ResolveEndpoint(profile.Endpoint))
                 {
-                    Content = JsonContent.Create(new
+                    Content = JsonContent.Create(new Dictionary<string, object>
                     {
-                        model = profile.Model,
-                        temperature = 0,
-                        messages = requestMessages,
-                        tools = GitToolSession.Definitions,
-                        tool_choice = "auto",
-                        parallel_tool_calls = false,
-                        stream = true,
-                        stream_options = new { include_usage = true }
-                    })
+                        ["model"] = profile.Model,
+                        ["temperature"] = parameters.Temperature,
+                        ["top_p"] = parameters.TopP,
+                        ["messages"] = requestMessages,
+                        ["tools"] = GitToolSession.Definitions,
+                        ["tool_choice"] = "auto",
+                        ["parallel_tool_calls"] = false,
+                        ["stream"] = true,
+                        ["stream_options"] = new { include_usage = true }
+                    }.Concat(parameters.MaxTokens > 0
+                        ? new Dictionary<string, object> { ["max_tokens"] = parameters.MaxTokens }
+                        : new Dictionary<string, object>()).ToDictionary(pair => pair.Key, pair => pair.Value))
                 };
                 var apiKey = ResolveApiKey(profile);
                 if (apiKey.Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
@@ -172,7 +179,7 @@ public sealed class ModelClient
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Review API returned {(int)response.StatusCode}. Native tools/tool_calls and tool_choice=auto are required. " +
                         "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.");
-                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage);
+                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage, parameters);
                 progress?.Invoke(ReviewStage.Response);
                 var choice = document.RootElement.GetProperty("choices")[0];
                 var finish = choice.GetProperty("finish_reason").GetString();
@@ -180,7 +187,7 @@ public sealed class ModelClient
                 if (message.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind != JsonValueKind.Null && toolCalls.GetArrayLength() > 0)
                 {
                     if (finish != "tool_calls") throw new InvalidDataException("Incomplete tool-call response; review not saved.");
-                    if (calls + toolCalls.GetArrayLength() > 64) throw new InvalidDataException("Git tool call budget exhausted; review incomplete.");
+                    if (calls + toolCalls.GetArrayLength() > parameters.MaxToolCalls) throw new InvalidDataException($"Git tool call budget exhausted (limit {parameters.MaxToolCalls}); review incomplete.");
                     // Validate the whole envelope before executing any calls, then preserve it for OpenAI tool_call_id matching.
                     var ids = new HashSet<string>();
                     foreach (var call in toolCalls.EnumerateArray())
@@ -256,7 +263,7 @@ public sealed class ModelClient
                         }
                         output += result.Length;
                         log?.Invoke($"Tool result {callId}: {result}");
-                        if (output > 512_000) throw new InvalidDataException("Git tool output budget exhausted; review incomplete.");
+                        if (output > parameters.ToolOutputLimit) throw new InvalidDataException($"Git tool output budget exhausted (limit {parameters.ToolOutputLimit}); review incomplete.");
                         messages.Add(new { role = "tool", tool_call_id = callId, content = result });
                     }
                     continue;
@@ -306,13 +313,13 @@ public sealed class ModelClient
                 log?.Invoke("Git agent: completed");
                 return content;
             }
-            throw new InvalidDataException("Git agent round budget exhausted: 60 of 60 model requests used; review incomplete.");
+            throw new InvalidDataException($"Git agent round budget exhausted: {parameters.MaxRounds} of {parameters.MaxRounds} model requests used; review incomplete.");
         }
         catch (OperationCanceledException exception) when (!callerToken.IsCancellationRequested && deadline.IsCancellationRequested)
         {
-            var message = Localization.Text(
-                "Commit review timed out after 15 minutes; review is incomplete.",
-                "Превышено время проверки коммита: 15 минут. Проверка не завершена.");
+            var message = Localization.Format(
+                "Commit review timed out after {0} minutes; review is incomplete.",
+                "Превышено время проверки коммита: {0} минут. Проверка не завершена.", parameters.ReviewMinutes);
             log?.Invoke("Git agent: " + message);
             throw new TimeoutException(message, exception);
         }
@@ -380,16 +387,18 @@ public sealed class ModelClient
         Action<ReviewStage>? progress = null)
     {
         ValidateProfile(profile);
-        var payload = new
+        var payload = new Dictionary<string, object>
         {
-            model = profile.Model,
-            temperature = 0,
-            messages = new[]
+            ["model"] = profile.Model,
+            ["temperature"] = profile.Parameters.Temperature,
+            ["top_p"] = profile.Parameters.TopP,
+            ["messages"] = new[]
             {
                 new { role = "system", content = systemPrompt },
                 new { role = "user", content = userPrompt }
             }
         };
+        if (profile.Parameters.MaxTokens > 0) payload["max_tokens"] = profile.Parameters.MaxTokens;
 
         using var request = new HttpRequestMessage(HttpMethod.Post, ResolveEndpoint(profile.Endpoint))
         {
@@ -446,6 +455,7 @@ public sealed class ModelClient
 
     private static void ValidateProfile(ModelProfile profile)
     {
+        profile.Parameters.Validate();
         ResolveEndpoint(profile.Endpoint);
         if (string.IsNullOrWhiteSpace(profile.Model))
             throw new InvalidOperationException(Localization.Text(

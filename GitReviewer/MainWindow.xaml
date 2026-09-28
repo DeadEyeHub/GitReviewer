@@ -213,8 +213,36 @@
                                 Click="TestModel_Click" />
                     </StackPanel>
 
-                    <TextBlock x:Name="ModelStatusTextBlock" Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2"
-                               TextWrapping="Wrap" Foreground="#444" />
+                    <StackPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="2">
+                        <TextBlock x:Name="ModelStatusTextBlock" TextWrapping="Wrap" Foreground="#444" />
+                        <TextBlock x:Name="ParametersHelpText" Margin="0,8" TextWrapping="Wrap" />
+                        <DataGrid x:Name="ParametersGrid" AutoGenerateColumns="False" CanUserAddRows="False"
+                                  CanUserDeleteRows="False" CanUserSortColumns="False" HeadersVisibility="None">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Binding="{Binding Caption}" IsReadOnly="True" Width="*" />
+                                <DataGridTemplateColumn Width="30" IsReadOnly="True">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border Width="18" Height="18" CornerRadius="9" Margin="4,2"
+                                                    BorderBrush="#65778A" BorderThickness="1" Background="#F3F6FA"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                    Cursor="Help" Focusable="True"
+                                                    AutomationProperties.Name="{Binding Caption}"
+                                                    AutomationProperties.HelpText="{Binding Help}"
+                                                    ToolTipService.InitialShowDelay="200" ToolTipService.ShowDuration="60000">
+                                                <Border.ToolTip>
+                                                    <ToolTip><TextBlock Text="{Binding Help}" MaxWidth="380" TextWrapping="Wrap" /></ToolTip>
+                                                </Border.ToolTip>
+                                                <TextBlock Text="?" Foreground="#42566B" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Binding="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Width="150" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
                 </Grid>
                 </ScrollViewer>
             </TabItem>

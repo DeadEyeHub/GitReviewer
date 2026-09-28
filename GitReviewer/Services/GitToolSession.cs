@@ -13,7 +13,7 @@ public sealed class GitToolSession : IDisposable
     private readonly Dictionary<string, int> _nextOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<int>> _readOffsets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FileStream> _snapshots = new(StringComparer.Ordinal);
-    private readonly long _diskLimit = ReadDiskLimit();
+    private long _diskLimit = ReadDiskLimit();
     private bool _disposed;
     private static long ReadDiskLimit() => int.TryParse(Environment.GetEnvironmentVariable("GITREVIEWER_SNAPSHOT_MB"), out var mb)
         && mb is >= 1 and <= 1024 ? mb * 1024L * 1024 : 64 * 1024L * 1024;
@@ -37,8 +37,9 @@ public sealed class GitToolSession : IDisposable
         if (parent is not null) _commits.Add(parent);
     }
 
-    public static async Task<GitToolSession> CreateAsync(string repository, string sha, CancellationToken token)
+    public static async Task<GitToolSession> CreateAsync(string repository, string sha, CancellationToken token, int snapshotMb = 0)
     {
+        if (snapshotMb is < 0 or > 1024) throw new ArgumentOutOfRangeException(nameof(snapshotMb));
         repository = Path.GetFullPath(repository);
         var root = await GitService.ReadPageAsync(repository, 0, PageSize, token, "rev-parse", "--show-toplevel");
         if (root.ExitCode != 0 || root.HasMore) throw new GitException("Select a valid Git working repository.");
@@ -58,6 +59,7 @@ public sealed class GitToolSession : IDisposable
             .Select(line => line[7..]).ToArray();
         if (parents.Any(id => id.Length != 40 || !id.All(Uri.IsHexDigit))) throw new GitException("Invalid commit parent header.");
         var session = new GitToolSession(repository, sha, parents.FirstOrDefault());
+        if (snapshotMb > 0) session._diskLimit = snapshotMb * 1024L * 1024;
         return session;
     }
 

@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using GitReviewer.Models;
 
 namespace GitReviewer.Services;
 
@@ -18,26 +19,28 @@ public static class ModelResponseReader
     public const int ToolLimit = 256_000;
     public const int TransportLimit = 128_000_000;
 
-    private sealed class ResponseBudget
+    private sealed class ResponseBudget(ModelParameters parameters)
     {
         private long _reasoning, _content, _tools;
         public void Add(string field, int length)
         {
             ref long used = ref _tools;
-            var limit = ToolLimit;
+            var limit = parameters.ToolArgumentLimit;
             var category = "tool_calls";
             if (field is "reasoning" or "reasoning_content")
-            { used = ref _reasoning; limit = ReasoningLimit; category = "reasoning + reasoning_content"; }
+            { used = ref _reasoning; limit = parameters.ReasoningLimit; category = "reasoning + reasoning_content"; }
             else if (field == "content")
-            { used = ref _content; limit = ContentLimit; category = "content"; }
+            { used = ref _content; limit = parameters.ContentLimit; category = "content"; }
             used += length;
             if (used > limit)
                 throw new InvalidDataException($"Model response {category} budget exceeded: {used} characters received, limit {limit}; review incomplete.");
         }
     }
 
-    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token, Action<TokenUsage?>? usage = null)
+    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token, Action<TokenUsage?>? usage = null, ModelParameters? parameters = null)
     {
+        parameters = parameters?.Clone() ?? new();
+        parameters.Validate();
         using var capturedUsage = new UsageCapture(usage);
         using var stream = await content.ReadAsStreamAsync(token);
         using var reader = new StreamReader(stream);
@@ -52,7 +55,7 @@ public static class ModelResponseReader
         string? finish = null;
         var done = false;
         var total = 0;
-        var budget = new ResponseBudget();
+        var budget = new ResponseBudget(parameters);
         void Event()
         {
             if (data.Length == 0) return;
@@ -95,7 +98,7 @@ public static class ModelResponseReader
                     foreach (var call in toolCalls.EnumerateArray())
                     {
                         var index = call.GetProperty("index").GetInt32();
-                        if (index is < 0 or >= 64) throw new InvalidDataException("Invalid tool-call index.");
+                        if (index < 0 || index >= parameters.MaxToolCalls) throw new InvalidDataException("Invalid tool-call index.");
                         if (!calls.TryGetValue(index, out var target))
                             calls[index] = target = new JsonObject { ["id"] = "", ["type"] = "", ["function"] = new JsonObject { ["name"] = "", ["arguments"] = "" } };
                         foreach (var field in new[] { "id", "type" })
@@ -124,7 +127,7 @@ public static class ModelResponseReader
             // Retain received partial content even when canceled or malformed. Never log HTTP headers/URLs.
             log?.Invoke("HTTP response data: " + new string(buffer, 0, count));
             total += count;
-            if (total > TransportLimit) throw new InvalidDataException($"Model HTTP response budget exceeded: {total} characters received, limit {TransportLimit}; review incomplete.");
+            if (total > parameters.TransportLimit) throw new InvalidDataException($"Model HTTP response budget exceeded: {total} characters received, limit {parameters.TransportLimit}; review incomplete.");
             if (!streaming) { body.Append(buffer, 0, count); continue; }
             for (var i = 0; i < count; i++)
             {

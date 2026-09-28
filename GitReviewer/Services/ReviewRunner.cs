@@ -368,12 +368,14 @@ public sealed class ReviewRunner
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
         Publish(CommitInfoChanged, commit);
         Emit(ReviewStage.PreparingDiff, profile, sha);
-        using var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken);
+        profile.Parameters.Validate();
+        using var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken, profile.Parameters.SnapshotMb);
         var result = new ReviewResult { EmptyDiff = await tools.IsEmptyAsync(cancellationToken) };
         if (!result.EmptyDiff)
         {
             var response = await _model.ReviewAsync(profile, tools, branch, _configuration.LoadPrompt(), cancellationToken,
-                stage => Emit(stage, profile, sha), message =>
+                stage => Emit(stage, profile, sha, stage == ReviewStage.AgentStarted
+                    ? profile.Parameters.ReviewMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture) : ""), message =>
                     Publish(ModelLog, message), (stage, detail) => Emit(stage, profile, sha, detail),
                 usage => Publish(UsageReceived, (repositoryIdentity, sha, usage)));
             Emit(ReviewStage.Parsing, profile, sha);

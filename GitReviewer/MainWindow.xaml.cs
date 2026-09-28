@@ -58,6 +58,84 @@ public partial class MainWindow : Window
     private readonly TokenUsageStore _tokenUsage = new(Path.Combine(AppPaths.DataDirectory, "token-usage.json"));
     private readonly System.Diagnostics.Stopwatch _commitClock = new();
     private readonly System.Diagnostics.Stopwatch _agentClock = new();
+    private TimeSpan _agentTimeLimit = ModelClient.ReviewTimeLimit;
+    private ModelParameters _editingParameters = new();
+
+    public sealed class ParameterRow
+    {
+        public required PropertyInfo Property { get; init; }
+        public string Value { get; set; } = "";
+        public string Help => Property.Name switch
+        {
+            nameof(ModelParameters.ReviewMinutes) => Localization.Text(
+                "Total time allowed for the model agent to review one commit, including all requests and tool calls. On timeout, the review is incomplete and the branch does not advance.",
+                "Общее время работы агента над одним коммитом, включая все запросы и вызовы инструментов. При превышении проверка считается незавершённой, ветка не продвигается."),
+            nameof(ModelParameters.Temperature) => Localization.Text(
+                "Controls randomness of generated responses. Lower values produce more predictable responses; higher values increase variation. Zero is the default for code review.",
+                "Управляет случайностью ответов. Низкие значения делают ответы более предсказуемыми, высокие увеличивают разнообразие. Для ревью по умолчанию используется 0."),
+            nameof(ModelParameters.TopP) => Localization.Text(
+                "Limits token sampling to candidates whose cumulative probability reaches this value. 1 does not narrow the candidate set. Usually adjust either Temperature or Top P, not both at once.",
+                "Ограничивает выбор токенов набором с указанной суммарной вероятностью. Значение 1 не сужает набор. Обычно меняют либо температуру, либо Top P, а не оба параметра одновременно."),
+            nameof(ModelParameters.MaxRounds) => Localization.Text(
+                "Maximum number of model requests for one commit, including follow-up requests and report corrections. One request may contain several tool calls. Exhausting this limit fails an unfinished review.",
+                "Максимальное число запросов к модели на один коммит, включая продолжения и исправления отчёта. В одном запросе может быть несколько вызовов инструментов. При исчерпании лимита незавершённая проверка останавливается."),
+            nameof(ModelParameters.ReminderRequests) => Localization.Text(
+                "When this many requests or fewer remain, each request reminds the model of its remaining budget and asks it to prepare the final report. The count includes the current request.",
+                "Когда остаётся столько запросов или меньше, каждый запрос напоминает модели об остатке и необходимости подготовить итоговый отчёт. Текущий запрос включён в остаток."),
+            nameof(ModelParameters.MaxToolCalls) => Localization.Text(
+                "Total tool-call budget for one commit across all requests. Each call counts separately, including rejected calls. Increasing it can increase time and token consumption.",
+                "Общий лимит вызовов инструментов на коммит во всех запросах. Каждый вызов считается отдельно, включая отклонённые. Увеличение может повысить время работы и расход токенов."),
+            nameof(ModelParameters.ToolOutputLimit) => Localization.Text(
+                "Total serialized tool-result characters sent to the model for one commit. This is a character limit, not a token count or the size of the repository. Larger values can exceed the model context window.",
+                "Суммарный объём сериализованных результатов инструментов, передаваемых модели на один коммит. Измеряется в символах, не в токенах и не в размере репозитория. Большой объём может превысить контекст модели."),
+            nameof(ModelParameters.ReasoningLimit) => Localization.Text(
+                "Maximum combined reasoning and reasoning_content characters in one model response. Resets for each request; exceeding it interrupts the review. It does not set the server token limit.",
+                "Максимальный суммарный объём reasoning и reasoning_content в одном ответе модели. Счётчик сбрасывается для каждого запроса; превышение прерывает ревью. Это не серверный лимит токенов."),
+            nameof(ModelParameters.ContentLimit) => Localization.Text(
+                "Maximum content characters in one model response, separate from reasoning and tool arguments. Exceeding it interrupts the review rather than accepting a truncated report.",
+                "Максимальное число символов текста content в одном ответе модели, отдельно от рассуждений и аргументов инструментов. Превышение прерывает проверку вместо принятия обрезанного отчёта."),
+            nameof(ModelParameters.ToolArgumentLimit) => Localization.Text(
+                "Maximum combined characters in tool-call names, arguments, IDs and types in one model response. This limits the model's tool requests, not the returned file contents.",
+                "Максимальный суммарный объём имён, аргументов, идентификаторов и типов вызовов инструментов в одном ответе модели. Ограничивает запросы модели к инструментам, а не возвращаемое содержимое файлов."),
+            nameof(ModelParameters.TransportLimit) => Localization.Text(
+                "Maximum raw HTTP response characters, including SSE/JSON framing and escaping. It should leave room above the decoded content limits. Exceeding it interrupts the review.",
+                "Максимальный объём HTTP-ответа в символах, включая оформление SSE/JSON и экранирование. Нужен запас относительно лимитов декодированного текста. Превышение прерывает ревью."),
+            _ => ""
+        };
+        public string Caption
+        {
+            get
+            {
+                var label = Property.GetCustomAttribute<System.ComponentModel.DataAnnotations.DisplayAttribute>()!;
+                var range = Property.GetCustomAttribute<System.ComponentModel.DataAnnotations.RangeAttribute>()!;
+                return Localization.Text(label.Name!, label.Description!) + $" [{range.Minimum}–{range.Maximum}]";
+            }
+        }
+    }
+
+    private void ShowParameters(ModelParameters parameters)
+    {
+        _editingParameters = parameters.Clone();
+        ParametersGrid.ItemsSource = typeof(ModelParameters).GetProperties()
+            .Where(p => p.Name is not nameof(ModelParameters.MaxTokens) and not nameof(ModelParameters.SnapshotMb))
+            .Select(p => new ParameterRow
+            { Property = p, Value = Convert.ToString(p.GetValue(parameters), CultureInfo.InvariantCulture)! }).ToList();
+    }
+
+    private ModelParameters ReadParameters()
+    {
+        ParametersGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+        ParametersGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        var result = _editingParameters.Clone();
+        foreach (var row in ParametersGrid.Items.OfType<ParameterRow>())
+        {
+            try { row.Property.SetValue(result, Convert.ChangeType(row.Value.Trim().Replace(',', '.'), row.Property.PropertyType, CultureInfo.InvariantCulture)); }
+            catch (Exception exception) when (exception is FormatException or OverflowException)
+            { throw new InvalidOperationException(Localization.Text("Invalid value: ", "Недопустимое значение: ") + row.Caption); }
+        }
+        result.Validate();
+        return result;
+    }
     private DateTimeOffset? _nextAutomaticRun;
     private int? _remainingCommits;
     private string? _usageCommitKey;
@@ -65,6 +143,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ShowParameters(new ModelParameters());
 
         _runner = new ReviewRunner(
             _git, _model, _configuration, _stateStore, _reportWriter);
@@ -201,6 +280,10 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        ParametersHelpText.Text = Localization.Text(
+            "Generation and review limits (per profile). Save to persist. Changes apply to the next review, not a running review. Decimal separator: dot or comma. Limits are shown in brackets.",
+            "Генерация и лимиты ревью (для каждого профиля). Нажмите «Сохранить». Изменения применятся к следующей проверке, не к текущей. Дробные числа: точка или запятая. Диапазоны указаны в скобках.");
+        ParametersGrid.Items.Refresh();
         Title = Localization.Format(
             "Git Reviewer {0}",
             "Проверка Git {0}",
@@ -668,6 +751,7 @@ public partial class MainWindow : Window
         ModelNameComboBox.Text = profile.Model;
         ApiKeyPasswordBox.Password = profile.ApiKey;
         ApiKeyEnvironmentTextBox.Text = profile.ApiKeyEnvironment;
+        ShowParameters(profile.Parameters);
         _models.ActiveProfile = profile.Name;
     }
 
@@ -679,6 +763,7 @@ public partial class MainWindow : Window
         ModelNameComboBox.Text = string.Empty;
         ApiKeyPasswordBox.Clear();
         ApiKeyEnvironmentTextBox.Clear();
+        ShowParameters(new ModelParameters());
         ProfileNameTextBox.Focus();
     }
 
@@ -699,6 +784,7 @@ public partial class MainWindow : Window
                 existing.Model = profile.Model;
                 existing.ApiKey = profile.ApiKey;
                 existing.ApiKeyEnvironment = profile.ApiKeyEnvironment;
+                existing.Parameters = profile.Parameters.Clone();
                 profile = existing;
             }
 
@@ -780,7 +866,8 @@ public partial class MainWindow : Window
             Endpoint = EndpointTextBox.Text.Trim(),
             Model = ModelNameComboBox.Text.Trim(),
             ApiKey = ApiKeyPasswordBox.Password.Trim(),
-            ApiKeyEnvironment = ApiKeyEnvironmentTextBox.Text.Trim()
+            ApiKeyEnvironment = ApiKeyEnvironmentTextBox.Text.Trim(),
+            Parameters = ReadParameters()
         };
     }
 
@@ -946,6 +1033,7 @@ public partial class MainWindow : Window
                 existing.Model = profile.Model;
                 existing.ApiKey = profile.ApiKey;
                 existing.ApiKeyEnvironment = profile.ApiKeyEnvironment;
+                existing.Parameters = profile.Parameters.Clone();
                 profile = existing;
             }
             _models.ActiveProfile = profile.Name;
@@ -1162,7 +1250,7 @@ public partial class MainWindow : Window
         RemainingCommitsText.Text = Localization.Text("Commits remaining (incl. current)\n", "Коммитов осталось (с текущим)\n") + (_remainingCommits?.ToString() ?? "—");
         static string Duration(TimeSpan time) => $"{(int)time.TotalHours:00}:{time.Minutes:00}:{time.Seconds:00}";
         ElapsedText.Text = Localization.Text("Commit processing time\n", "Время обработки коммита\n") + Duration(_commitClock.Elapsed);
-        var remaining = ModelClient.ReviewTimeLimit - _agentClock.Elapsed;
+        var remaining = _agentTimeLimit - _agentClock.Elapsed;
         ElapsedText.Text += Localization.Text("\nUntil review timeout: ", "\nДо лимита проверки: ") +
             (_agentClock.IsRunning ? Duration(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero) : "—");
         NextRunText.Text = Localization.Text("Next automatic check\n", "До следующего автозапуска\n") +
@@ -1240,7 +1328,12 @@ public partial class MainWindow : Window
                 _commitClock.Stop();
                 _agentClock.Stop();
             }
-            else if (progress.Stage == ReviewStage.AgentStarted) _agentClock.Restart();
+            else if (progress.Stage == ReviewStage.AgentStarted)
+            {
+                _agentTimeLimit = int.TryParse(progress.Detail, out var minutes)
+                    ? TimeSpan.FromMinutes(minutes) : ModelClient.ReviewTimeLimit;
+                _agentClock.Restart();
+            }
             else if (progress.Stage == ReviewStage.Parsing) _agentClock.Stop();
         });
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
@@ -1263,7 +1356,7 @@ public partial class MainWindow : Window
             ReviewStage.FormatCorrection => Localization.Text("Requesting report format correction", "Запрошено исправление формата отчёта"),
             ReviewStage.Report => Localization.Text("Saving review report", "Сохранение отчёта проверки"),
             ReviewStage.Completed => Localization.Text("Commit review completed", "Проверка коммита завершена"),
-            ReviewStage.AgentStarted => Localization.Text("Review timer started (15 minutes)", "Таймер проверки запущен (15 минут)"),
+            ReviewStage.AgentStarted => Localization.Text("Review timer started (minutes)", "Таймер проверки запущен (минуты)"),
             ReviewStage.Failed => Localization.Text("Commit review failed", "Ошибка проверки коммита"),
             ReviewStage.Canceled => Localization.Text("Commit review canceled", "Проверка коммита отменена"),
             _ => progress.Stage.ToString()
