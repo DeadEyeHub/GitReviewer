@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.1.18** uses native model-driven Git tools and requires a
+Version **2.1.19** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -58,7 +58,13 @@ on completion, failure or cancellation and restarts for the next attempt. The ne
 countdown appears during the poll delay, including the delay after a failed cycle;
 during processing it says "After this cycle", and when stopped it shows a dash.
 
-The Dashboard also shows provider-reported token totals for this repository/commit
+The Dashboard shows separate provider-reported Input and Output token counters
+for the commit, today and all time. Both counters persist across restarts. Historical
+total-only records are retained but cannot be retroactively split: unavailable
+breakdowns show "Unavailable", and partially known counters show "+ ?". Missing
+input/output fields from the provider are not treated as known zeroes.
+
+The Dashboard also tracks provider-reported token totals for this repository/commit
 (including retries), the current local calendar day, and all reviews since tracking
 was enabled. Input and output tokens are counted from API `usage`, never estimated
 from character counts; repeated input/context is included as reported by the provider.
@@ -99,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.1.18-win-x64.exe
+dist\GitReviewer-2.1.19-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -243,15 +249,16 @@ separate report entry and does not change the automatic monitoring position in
 `state.json`. Stop automatic monitoring before starting a manual review.
 
 To choose where automatic monitoring begins, enter a short or full SHA in
-**Selected commit SHA**, then use **Start from selected commit** next to the
-current commit. The SHA must be an ancestor of the selected branch tip. It is
+**Selected commit SHA**, then use **Start from selected commit** beside **Review
+commit** on the Project tab. This immediately starts automatic review, including
+the selected commit and then subsequent commits. The SHA must be an ancestor of the selected branch tip. It is
 stored as a pending start, so the selected commit is reviewed first. The normal
 branch cursor replaces it only after that review succeeds.
 
-**Review selected and later**, beside the repository picker, saves that same
-pending start and immediately starts automatic review (selected commit included).
-It uses the SHA in **Selected commit SHA** and the selected branch; normal access
-validation and stop/error behavior apply. Automatic monitoring continues afterward.
+Normal access validation and stop/error behavior apply. Automatic monitoring
+continues afterward. The Dashboard has Start, Stop, Hide to tray and Exit in its
+upper-right corner; Log and Open report are on the right of the commit card.
+There is no bottom action bar or duplicate action beside the repository picker.
 
 Journal updates tolerate hidden and not-yet-laid-out text fields, including the
 separate details window. Scroll anchors are validated against the current layout.

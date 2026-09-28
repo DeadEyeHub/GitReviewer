@@ -231,16 +231,12 @@ public partial class MainWindow : Window
             "Select from the latest 100 commits of the selected branch, or enter a short/full SHA. The list refreshes when opened.",
             "Выберите из последних 100 коммитов выбранной ветки или введите короткий/полный SHA. Список обновляется при открытии.");
         ReviewCommitButton.Content = Localization.Text("Review commit", "Проверить коммит");
-        ReviewFromSelectedButton.Content = Localization.Text("Review selected and later", "Выбранный и последующие");
-        ReviewFromSelectedButton.ToolTip = Localization.Text(
-            "Start automatic review with the Selected commit SHA, then review subsequent commits on the selected branch.",
-            "Запустить проверку с коммита из поля «Выбранный коммит SHA», затем проверять последующие коммиты выбранной ветки.");
         SetStartCommitButton.Content = Localization.Text(
             "Start from selected commit",
             "Начать с выбранного коммита");
         SetStartCommitButton.ToolTip = Localization.Text(
-            "Use the SHA entered above as the first commit of the next automatic review.",
-            "Использовать введенный выше SHA как первый коммит следующей автоматической проверки.");
+            "Start review with the selected SHA, then review subsequent commits on the selected branch.",
+            "Запустить проверку с выбранного SHA, затем проверять последующие коммиты выбранной ветки.");
         AuthenticationLabel.Text = Localization.Text("Authentication", "Аутентификация");
         SshKeyLabel.Text = Localization.Text("SSH private key", "Приватный SSH-ключ");
         BrowseSshKeyButton.Content = Localization.Text("Browse...", "Обзор...");
@@ -885,9 +881,6 @@ public partial class MainWindow : Window
     }
 
     private async void SetStartCommit_Click(object sender, RoutedEventArgs e)
-        => await SetStartCommitAsync();
-
-    private async void ReviewFromSelected_Click(object sender, RoutedEventArgs e)
     {
         if (await SetStartCommitAsync()) await StartReviewAsync();
     }
@@ -1156,7 +1149,6 @@ public partial class MainWindow : Window
     private void UpdateStartCommitButton()
     {
         SetStartCommitButton.IsEnabled = CanSetStartCommit();
-        ReviewFromSelectedButton.IsEnabled = CanSetStartCommit();
     }
 
     private void SetStatus(string status)
@@ -1185,9 +1177,14 @@ public partial class MainWindow : Window
     {
         var now = DateTimeOffset.Now;
         var tokens = _tokenUsage.Snapshot(_usageCommitKey, now);
-        string Count(TokenTally tally) => tally.Requests == 0 ? "0" : tally.MissingUsage == tally.Requests
-            ? Localization.Text("Unavailable", "Нет данных")
-            : tally.Tokens.ToString("N0") + (tally.MissingUsage > 0 ? " + ?" : "");
+        string Count(TokenTally tally)
+        {
+            string Part(long value, long known) => tally.Requests == 0 ? "0" : known == 0
+                ? Localization.Text("Unavailable", "Нет данных")
+                : value.ToString("N0") + (known < tally.Requests ? " + ?" : "");
+            return Localization.Text("Input: ", "Входящие: ") + Part(tally.Input, tally.InputRequests) +
+                Localization.Text("\nOutput: ", "\nИсходящие: ") + Part(tally.Output, tally.OutputRequests);
+        }
         CommitTokensText.Text = Localization.Text("Tokens · this commit\n", "Токены · этот коммит\n") + Count(tokens.Commit);
         TodayTokensText.Text = Localization.Text("Tokens · today\n", "Токены · сегодня\n") + Count(tokens.Today);
         TotalTokensText.Text = Localization.Text("Tokens · all time\n", "Токены · всего\n") + Count(tokens.Total);
@@ -1204,8 +1201,8 @@ public partial class MainWindow : Window
             ? Localization.Text("Select a repository on the Project tab", "Выберите репозиторий на вкладке «Проект»")
             : $"{_repositoryPath}\n{_selectedBranch}";
         UsageNoteText.Text = _tokenUsage.Error ?? Localization.Format(
-            "Provider-reported input + output tokens, across retries. Since tracking was enabled. Requests without usage: {0} today / {1} total; totals may be incomplete.",
-            "Токены входа + выхода по данным сервера, включая повторы. С момента включения учёта. Запросов без usage: {0} сегодня / {1} всего; суммы могут быть неполными.",
+            "Provider-reported input/output tokens, including retries. Older totals may lack a breakdown; + ? means incomplete data. Requests without usage: {0} today / {1} total.",
+            "Входящие/исходящие токены по данным сервера, включая повторы. У старой статистики может не быть разбивки; + ? означает неполные данные. Запросов без usage: {0} сегодня / {1} всего.",
             tokens.Today.MissingUsage, tokens.Total.MissingUsage);
     }
 

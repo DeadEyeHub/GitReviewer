@@ -5,25 +5,37 @@
         MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
 
         <TabControl x:Name="MainTabs">
             <TabItem x:Name="DashboardTab" Header="Dashboard">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="20">
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,16,0">
                         <TextBlock FontSize="20" TextWrapping="Wrap"><Run x:Name="StatusLabelRun" Text="Status: "/><Run x:Name="StatusRun" Text="Stopped" FontWeight="SemiBold" /></TextBlock>
                         <TextBlock x:Name="DashboardRepositoryText" Margin="0,8,0,16" TextWrapping="Wrap" Foreground="#555" />
+                            </StackPanel>
+                            <UniformGrid Grid.Column="1" Columns="2" VerticalAlignment="Top">
+                                <Button x:Name="StartButton" Padding="18,7" Margin="4" Content="Start" Click="Start_Click" />
+                                <Button x:Name="StopButton" Padding="18,7" Margin="4" Content="Stop" IsEnabled="False" Click="Stop_Click" />
+                                <Button x:Name="HideToTrayButton" Padding="18,7" Margin="4" Content="Hide to tray" Click="HideToTray_Click" />
+                                <Button x:Name="ExitButton" Padding="18,7" Margin="4" Content="Exit" Click="Exit_Click" />
+                            </UniformGrid>
+                        </Grid>
                         <Border Padding="16" Background="#F3F6FA" CornerRadius="6">
+                            <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel>
-                                <TextBlock><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
+                                <TextBlock TextWrapping="Wrap" Margin="0,0,16,0"><Run x:Name="CurrentCommitLabelRun" Text="Current commit: "/><Run x:Name="CommitRun" Text="-" FontFamily="Consolas" /></TextBlock>
                                 <TextBlock x:Name="CommitSubjectTextBlock" Margin="0,8,0,0" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" />
                                 <TextBlock x:Name="CommitDetailsText" Margin="0,8,0,0" TextWrapping="Wrap" />
-                                <Button x:Name="SetStartCommitButton" Margin="0,12,0,0" HorizontalAlignment="Left" Padding="12,4"
-                                        Content="Start from selected commit" IsEnabled="False" Click="SetStartCommit_Click" />
                             </StackPanel>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
+                                <Button x:Name="OpenLogButton" Padding="18,7" Margin="0,0,0,8" Content="Log" Click="OpenLog_Click" />
+                                <Button x:Name="OpenReportButton" Padding="18,7" Content="Open report" Click="OpenReport_Click" />
+                            </StackPanel>
+                            </Grid>
                         </Border>
                         <UniformGrid Columns="3" Margin="-4,12,-4,12">
                             <Border Margin="4" Padding="12" Background="#F3F6FA" CornerRadius="6"><TextBlock x:Name="CommitTokensText" TextWrapping="Wrap" /></Border>
@@ -68,12 +80,8 @@
                     <TextBlock x:Name="ProjectFolderLabel" Grid.Row="0" Grid.Column="0" Margin="0,7,12,12" Text="Project folder" />
                     <TextBox x:Name="RepositoryPathTextBox" Grid.Row="0" Grid.Column="1" Margin="0,0,8,12"
                              VerticalContentAlignment="Center" TextChanged="RepositoryPath_Changed" />
-                    <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,12">
-                    <Button x:Name="BrowseButton" Padding="18,6"
+                    <Button x:Name="BrowseButton" Grid.Row="0" Grid.Column="2" Margin="0,0,0,12" Padding="18,6"
                             Content="Browse..." Click="BrowseRepository_Click" />
-                    <Button x:Name="ReviewFromSelectedButton" Margin="0,4,0,0" Padding="8,6"
-                            Content="Review selected and later" IsEnabled="False" Click="ReviewFromSelected_Click" />
-                    </StackPanel>
 
                     <TextBlock x:Name="IntervalLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Interval, seconds" />
                     <TextBox x:Name="IntervalTextBox" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
@@ -132,7 +140,7 @@
 
                     <TextBlock x:Name="SelectedCommitLabel" Grid.Row="10" Grid.Column="0" Margin="0,7,12,12"
                                Text="Selected commit SHA" />
-                    <StackPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,0,0,12" VerticalAlignment="Top">
+                    <WrapPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12" VerticalAlignment="Top">
                         <ComboBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
                                   IsEditable="True" IsTextSearchEnabled="False" TextSearch.TextPath="Sha"
                                   DisplayMemberPath="Display" MaxDropDownHeight="320"
@@ -140,7 +148,9 @@
                                   VerticalContentAlignment="Center" ToolTip="Select a commit or enter a SHA" />
                         <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
                                 Click="ReviewCommit_Click" />
-                    </StackPanel>
+                        <Button x:Name="SetStartCommitButton" Margin="8,0,0,0" Padding="12,6"
+                                Content="Start from selected commit" IsEnabled="False" Click="SetStartCommit_Click" />
+                    </WrapPanel>
                 </Grid>
                 </ScrollViewer>
             </TabItem>
@@ -237,13 +247,5 @@
             </TabItem>
         </TabControl>
 
-                <WrapPanel Grid.Row="1" Margin="0,10,0,0" HorizontalAlignment="Right">
-                    <Button x:Name="OpenLogButton" Padding="12,7" Margin="0,0,8,0" Content="Log" Click="OpenLog_Click" />
-                    <Button x:Name="StartButton" Padding="18,7" Margin="0,0,8,0" Content="Start" Click="Start_Click" />
-                    <Button x:Name="StopButton" Padding="18,7" Margin="0,0,8,0" Content="Stop" IsEnabled="False" Click="Stop_Click" />
-                    <Button x:Name="OpenReportButton" Padding="18,7" Margin="0,0,8,0" Content="Open report" Click="OpenReport_Click" />
-                    <Button x:Name="HideToTrayButton" Padding="18,7" Margin="0,0,8,0" Content="Hide to tray" Click="HideToTray_Click" />
-                    <Button x:Name="ExitButton" Padding="18,7" Content="Exit" Click="Exit_Click" />
-                </WrapPanel>
     </Grid>
 </Window>

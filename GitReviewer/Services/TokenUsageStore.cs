@@ -4,6 +4,8 @@ namespace GitReviewer.Services;
 
 public sealed record TokenUsage(long Input, long Output, long Total)
 {
+    public bool HasInput { get; init; } = true;
+    public bool HasOutput { get; init; } = true;
     public static TokenUsage? Parse(JsonElement root)
     {
         if (!root.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object) return null;
@@ -13,22 +15,33 @@ public sealed record TokenUsage(long Input, long Output, long Total)
         var output = Read("completion_tokens");
         var total = Read("total_tokens");
         if (total is null && (input is null || output is null || input > long.MaxValue - output)) return null;
-        return new(input ?? 0, output ?? 0, total ?? (input!.Value + output!.Value));
+        return new(input ?? 0, output ?? 0, total ?? (input!.Value + output!.Value))
+        { HasInput = input is not null, HasOutput = output is not null };
     }
 }
 
 public sealed class TokenTally
 {
     public long Tokens { get; set; }
+    public long Input { get; set; }
+    public long Output { get; set; }
+    public long InputRequests { get; set; }
+    public long OutputRequests { get; set; }
     public long Requests { get; set; }
     public long MissingUsage { get; set; }
     public void Add(TokenUsage? usage)
     {
         Requests = checked(Requests + 1);
         if (usage is null) MissingUsage = checked(MissingUsage + 1);
-        else Tokens = checked(Tokens + usage.Total);
+        else
+        {
+            Tokens = checked(Tokens + usage.Total);
+            if (usage.HasInput) { Input = checked(Input + usage.Input); InputRequests = checked(InputRequests + 1); }
+            if (usage.HasOutput) { Output = checked(Output + usage.Output); OutputRequests = checked(OutputRequests + 1); }
+        }
     }
-    public TokenTally Copy() => new() { Tokens = Tokens, Requests = Requests, MissingUsage = MissingUsage };
+    public TokenTally Copy() => new() { Tokens = Tokens, Requests = Requests, MissingUsage = MissingUsage,
+        Input = Input, Output = Output, InputRequests = InputRequests, OutputRequests = OutputRequests };
 }
 
 public sealed class TokenUsageStore
@@ -51,7 +64,9 @@ public sealed class TokenUsageStore
         {
             if (File.Exists(path)) _data = JsonSerializer.Deserialize<Data>(File.ReadAllText(path)) ?? throw new InvalidDataException("Empty usage file");
             if (_data.Total is null || _data.Days is null || _data.Commits is null ||
-                _data.Days.Values.Concat(_data.Commits.Values).Append(_data.Total).Any(t => t is null || t.Tokens < 0 || t.Requests < 0 || t.MissingUsage < 0))
+                _data.Days.Values.Concat(_data.Commits.Values).Append(_data.Total).Any(t => t is null || t.Tokens < 0 || t.Requests < 0 || t.MissingUsage < 0 ||
+                    t.Input < 0 || t.Output < 0 || t.InputRequests < 0 || t.OutputRequests < 0 ||
+                    t.InputRequests > t.Requests || t.OutputRequests > t.Requests))
                 throw new InvalidDataException("Invalid usage counters");
         }
         catch (Exception e) { _loadFailed = true; _data = new(); Error = "Token usage could not be loaded: " + e.Message; }
