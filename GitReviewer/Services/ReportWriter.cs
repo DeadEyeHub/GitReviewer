@@ -67,6 +67,12 @@ public sealed class ReportWriter
                 .AppendLine(Localization.Format("- Result: {0}", "- Результат: {0}", DescribeResult(result)))
                 .AppendLine();
 
+            if (result.AnalysisDuration is { } duration)
+            {
+                var elapsed = FormattableString.Invariant($"{(long)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}.{duration.Milliseconds:000}");
+                text.AppendLine(Localization.Format("- Analysis duration: {0}", "- Длительность анализа: {0}", elapsed)).AppendLine();
+            }
+
             foreach (var finding in result.Findings)
             {
                 var line = finding.Line?.ToString() ?? Localization.Text("line unknown", "строка неизвестна");

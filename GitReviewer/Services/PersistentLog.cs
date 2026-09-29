@@ -57,7 +57,7 @@ public sealed class PersistentLog
     {
         lock (_gate)
         {
-            var stamp = DateTimeOffset.Now.ToString("yyyy-MM-dd'T'HH:mm:ss.fffzzz");
+            var stamp = DateTimeOffset.Now.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
             foreach (var source in message.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
             {
                 // Bound even a single huge entry, without dropping its persisted content.

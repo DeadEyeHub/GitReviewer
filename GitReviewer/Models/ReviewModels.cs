@@ -29,6 +29,7 @@ public sealed record GitRepositoryIdentity(
 
 public sealed class ReviewResult
 {
+    public TimeSpan? AnalysisDuration { get; set; }
     public List<Finding> Findings { get; } = [];
     public string? UnstructuredResponse { get; set; }
     public bool EmptyDiff { get; set; }

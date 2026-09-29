@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.2.2** uses native model-driven Git tools and requires a
+Version **2.2.3** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.2.2-win-x64.exe
+dist\GitReviewer-2.2.3-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -597,6 +597,13 @@ The WPF project can be built on Linux with `dotnet build`, but running and
 interactively checking the GUI and tray notifications requires Windows.
 
 ## User Data
+
+New journal and detailed-log entries use local computer time in
+`yyyy-MM-dd HH:mm:ss` format, without an offset suffix. Existing log history is
+left unchanged. Reports include analysis duration (`HH:mm:ss.fff`) for each
+successful commit review, measured with a monotonic clock from commit preparation
+through model analysis and parsing. Fetch, retry waiting, and report writing are
+excluded; each attempt has its own duration.
 
 User-specific files are stored in:
 

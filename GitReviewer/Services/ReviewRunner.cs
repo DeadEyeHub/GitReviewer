@@ -390,6 +390,8 @@ public sealed class ReviewRunner
         CommitChanged?.Invoke(Short(sha));
         Emit(ReviewStage.Started, profile, sha);
 
+        var analysisClock = System.Diagnostics.Stopwatch.StartNew();
+
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
         Publish(CommitInfoChanged, commit);
         Emit(ReviewStage.PreparingDiff, profile, sha);
@@ -408,6 +410,8 @@ public sealed class ReviewRunner
         }
 
         Emit(ReviewStage.Report, profile, sha);
+        analysisClock.Stop();
+        result.AnalysisDuration = analysisClock.Elapsed;
         await _reportWriter.AppendAsync(
             repositoryPath, branch, commit, result, manualReview, cancellationToken, repositoryIdentity);
         return result;
