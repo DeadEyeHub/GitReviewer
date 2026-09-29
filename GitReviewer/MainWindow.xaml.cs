@@ -288,6 +288,8 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        SaveCustomPromptButton.Content = Localization.Text("Save custom prompt", "Сохранить свой промпт");
+        ResetCustomPromptButton.Content = Localization.Text("Use built-in prompt", "Использовать встроенный");
         BuildMailPanel();
         ParametersHelpText.Text = Localization.Text(
             "Generation and review limits (per profile). Save to persist. Changes apply to the next review, not a running review. Decimal separator: dot or comma. Limits are shown in brackets.",
@@ -878,6 +880,18 @@ public partial class MainWindow : Window
             ApiKeyEnvironment = ApiKeyEnvironmentTextBox.Text.Trim(),
             Parameters = ReadParameters()
         };
+    }
+
+    private void SaveCustomPrompt_Click(object sender, RoutedEventArgs e)
+    {
+        try { _configuration.SavePrompt(PromptTextBox.Text); AppendLog(Localization.Text("Custom prompt saved for subsequent reviews.", "Свой промпт сохранён для последующих проверок.")); }
+        catch (Exception ex) { ShowError(ex.Message); }
+    }
+    private void ResetCustomPrompt_Click(object sender, RoutedEventArgs e)
+    {
+        if (System.Windows.MessageBox.Show(Localization.Text("Remove the custom prompt for this language and use the built-in version?", "Удалить свой промпт для этого языка и использовать встроенный?"), "GitReviewer", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+        try { _configuration.ResetPrompt(); PromptTextBox.Text = _configuration.LoadPrompt(); }
+        catch (Exception ex) { ShowError(ex.Message); }
     }
 
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)

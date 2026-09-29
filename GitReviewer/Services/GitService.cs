@@ -293,20 +293,20 @@ public sealed class GitService
         string sha,
         CancellationToken cancellationToken)
     {
-        const string format = "%H%x1f%an%x1f%aI%x1f%s";
+        const string format = "%H%x1f%an%x1f%aI%x1f%ae%x1f%s";
         if (sha.Length != 40 || !sha.All(Uri.IsHexDigit)) throw new GitException("A full commit SHA is required.");
         var metadata = await ReadPageAsync(repositoryPath, 0, 16_000, cancellationToken,
             "show", "--no-show-signature", "-s", $"--format={format}", sha, "--");
         if (metadata.ExitCode != 0 || metadata.HasMore) throw new GitException("Commit metadata unavailable or exceeds output limit.");
         var output = metadata.Output.Trim();
-        var parts = output.Split('\x1f', 4);
-        if (parts.Length != 4 || !DateTimeOffset.TryParse(parts[2], CultureInfo.InvariantCulture,
+        var parts = output.Split('\x1f', 5);
+        if (parts.Length != 5 || !DateTimeOffset.TryParse(parts[2], CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind, out var date))
             throw new GitException(Localization.Format(
                 "Could not read commit data for {0}.",
                 "Не удалось прочитать данные коммита {0}.",
                 sha));
-        return new CommitInfo(parts[0], parts[1], date, parts[3]);
+        return new CommitInfo(parts[0], parts[1], date, parts[4], parts[3]);
     }
 
     private static async Task<string> RunRequiredAsync(

@@ -11,6 +11,8 @@ namespace GitReviewer.Services;
 public sealed class MailSettings
 {
     public bool Enabled { get; set; }
+    public bool SendToAuthor { get; set; }
+    public bool SendWithoutBugs { get; set; }
     public string Host { get; set; } = "";
     public int Port { get; set; } = 587;
     public string Security { get; set; } = "StartTls";
@@ -33,7 +35,7 @@ public sealed class MailSettings
         if (From.Any(char.IsControl) || Recipients.Any(char.IsControl) || Username.Any(char.IsControl))
             throw new InvalidOperationException("Invalid mail address or username.");
         _ = MailboxAddress.Parse(From);
-        if (Addresses().Count == 0) throw new InvalidOperationException(Localization.Text("Enter a recipient.", "Укажите получателя."));
+        if (Addresses().Count == 0 && !SendToAuthor) throw new InvalidOperationException(Localization.Text("Enter a recipient.", "Укажите получателя."));
         _ = GetPassword();
     }
 }
@@ -109,14 +111,28 @@ public sealed class MailNotifications : IAsyncDisposable
     }
     public void Enqueue(CommitReviewed review)
     {
-        if (review.FindingCount == 0 || review.HasUnstructuredResponse || review.EmptyDiff) return;
+        if (review.HasUnstructuredResponse) return;
         lock (_gate)
         {
             if (LoadError is not null) { _log(LoadError); return; }
             if (!_settings.Enabled) return;
+            if ((review.FindingCount == 0 || review.EmptyDiff) && !_settings.SendWithoutBugs) return;
             try
             {
                 _settings.Validate();
+                var recipients = _settings.Addresses();
+                if (_settings.SendToAuthor && !string.IsNullOrWhiteSpace(review.AuthorEmail))
+                {
+                    // Commit metadata is untrusted: accept exactly one bare mailbox, never a header/list.
+                    var email = review.AuthorEmail.Trim();
+                    if (!email.Any(char.IsControl) && MailboxAddress.TryParse(email, out var author) &&
+                        author.Address.Equals(email, StringComparison.OrdinalIgnoreCase) && email.Contains('@'))
+                    {
+                        if (!recipients.Any(r => r.Address.Equals(author.Address, StringComparison.OrdinalIgnoreCase))) recipients.Add(author);
+                    }
+                    else _log("Mail: invalid commit author address skipped.");
+                }
+                if (recipients.Count == 0) { _log("Mail: no valid recipients for this commit; skipped."); return; }
                 if (string.IsNullOrWhiteSpace(review.ReportMarkdown)) throw new InvalidDataException("Report is unavailable.");
                 var identity = Path.GetFullPath(string.IsNullOrEmpty(review.RepositoryIdentity) ? review.RepositoryPath : review.RepositoryIdentity);
                 if (OperatingSystem.IsWindows()) identity = identity.ToUpperInvariant();
@@ -124,7 +140,7 @@ public sealed class MailNotifications : IAsyncDisposable
                 if (_jobs.Any(j => j.Key == key)) return;
                 var job = new MailJob { Key = key, MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
                     Subject = Clean($"[GitReviewer] {Path.GetFileName(review.RepositoryPath)} / {review.BranchRef} / {review.Sha[..Math.Min(8, review.Sha.Length)]} — bugs: {review.FindingCount}"),
-                    Report = review.ReportMarkdown, From = _settings.From, Recipients = _settings.Recipients, NextAttempt = _now() };
+                    Report = review.ReportMarkdown, From = _settings.From, Recipients = string.Join(";", recipients.Select(r => r.ToString())), NextAttempt = _now() };
                 _jobs.Add(job);
                 try { Save(_queuePath, _jobs); } catch { _jobs.Remove(job); throw; }
                 _log(Localization.Text("Mail: report queued.", "Почта: отчёт поставлен в очередь."));
@@ -139,6 +155,8 @@ public sealed class MailNotifications : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, _stop.Token);
         token = linked.Token;
         settings.Validate();
+        if (settings.Addresses().Count == 0) throw new InvalidOperationException("Enter an explicit recipient for the test email.");
+        SaveSettings(settings);
         await _sending.WaitAsync(token);
         try
         {

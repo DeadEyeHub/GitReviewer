@@ -602,15 +602,24 @@ interactively checking the GUI and tray notifications requires Windows.
 
 The **Mail** tab configures the SMTP host/port, `None`, required `StartTls` or
 `SslOnConnect`, optional username/password, sender and semicolon-separated
-recipients. Notifications are disabled by default. **Send test email** sends only
-synthetic text, without repository data. `None` transmits credentials and reports
+recipients. Sender display names use `GitReviewer <sender@example.com>` syntax.
+Notifications are disabled by default. **Send test email** saves validated settings
+before attempting delivery (also when delivery fails), without enabling notifications,
+and sends only synthetic text, without repository data. It requires an explicit
+recipient. `None` transmits credentials and reports
 unencrypted and asks for confirmation; use it only on a trusted test network.
 TLS modes use normal certificate validation. OAuth is not implemented.
 
 After a successful saved review containing findings, a background service queues
 one message with that commit's Markdown report in the body and as
-`commit-review.md`. It does not attach the accumulated report history. Empty diffs,
-NO_BUGS and incomplete/unstructured reviews do not trigger mail. SMTP failures
+`commit-review.md`. It does not attach the accumulated report history.
+**Send even without bugs** also enables notifications for successful NO_BUGS and
+empty-diff reviews. Incomplete/unstructured reviews and timeouts never trigger mail.
+**Send to commit author** adds the Git author email, deduplicated against configured
+recipients. Invalid author addresses are skipped; with no valid recipients the
+notification is skipped. Author addresses are untrusted repository data: enable
+this option only for trusted repositories, since reports may leave your organization.
+Both options are disabled by default and do not resend previous reviews. SMTP failures
 never repeat or invalidate the Git/model review.
 
 `mail-settings.json` stores credentials encrypted with Windows DPAPI for the
@@ -667,7 +676,11 @@ model instructions.
 
 System prompts are embedded in the executable from `GitReviewer/system-prompt.example.txt`
 and `GitReviewer/system-prompt.ru.example.txt`. Updating the application therefore
-updates the prompt automatically. Language switching selects the matching embedded
-text. The System prompt tab is read-only; edit the source templates and rebuild to
-change it. Legacy `system-prompt.txt` files in AppData are ignored, never rewritten
-or deleted, and no new prompt file is created there.
+updates the default prompt automatically. The **System prompt** tab allows editing
+and explicitly saving a custom prompt (1–32000 characters). Overrides are stored
+separately for each language in `system-prompt.custom.en.txt` and
+`system-prompt.custom.ru.txt` in the data directory. A saved override takes priority
+over the embedded default, including after application updates. **Reset to default**
+removes the current language's override after confirmation. Changes apply to the
+next review, not a running model request. Legacy `system-prompt.txt` files in AppData
+remain ignored and are never rewritten or deleted.

@@ -430,7 +430,7 @@ public sealed class ReviewRunner
         Emit(ReviewStage.Completed, profile, sha);
         Publish(Reviewed, new CommitReviewed(path, branch, sha, result.Findings.Count,
             result.UnstructuredResponse is not null, result.EmptyDiff, manual,
-            result.ReportMarkdown, result.RepositoryIdentity));
+            result.ReportMarkdown, result.RepositoryIdentity, result.AuthorEmail));
     }
 
     private static void Publish<T>(Action<T>? handlers, T value)

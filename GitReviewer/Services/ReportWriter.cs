@@ -138,6 +138,7 @@ public sealed class ReportWriter
             File.Move(temporaryPath, path, true);
             result.ReportMarkdown = text.ToString();
             result.RepositoryIdentity = repositoryIdentity ?? repositoryPath;
+            result.AuthorEmail = commit.AuthorEmail;
         }
         finally
         {

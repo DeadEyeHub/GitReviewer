@@ -4,7 +4,8 @@ public sealed record CommitInfo(
     string Sha,
     string Author,
     DateTimeOffset Date,
-    string Subject);
+    string Subject,
+    string AuthorEmail = "");
 
 public sealed record CommitChoice(string Sha, string Subject)
 {
@@ -32,6 +33,7 @@ public sealed class ReviewResult
     public TimeSpan? AnalysisDuration { get; set; }
     public string ReportMarkdown { get; set; } = "";
     public string RepositoryIdentity { get; set; } = "";
+    public string AuthorEmail { get; set; } = "";
     public List<Finding> Findings { get; } = [];
     public string? UnstructuredResponse { get; set; }
     public bool EmptyDiff { get; set; }
@@ -59,4 +61,4 @@ public sealed record ReviewProgress(ReviewStage Stage, string Model, string Comm
 
 public sealed record CommitReviewed(string RepositoryPath, string BranchRef, string Sha,
     int FindingCount, bool HasUnstructuredResponse, bool EmptyDiff, bool Manual,
-    string ReportMarkdown = "", string RepositoryIdentity = "");
+    string ReportMarkdown = "", string RepositoryIdentity = "", string AuthorEmail = "");

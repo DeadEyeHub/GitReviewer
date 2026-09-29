@@ -138,8 +138,17 @@ public sealed class ConfigurationStore
         File.WriteAllText(AppPaths.ModelsConfig, text.ToString(), Encoding.UTF8);
     }
 
-    public string LoadPrompt() => AppPaths.ReadTemplate(Localization.Language == "ru"
-        ? "system-prompt.ru.example.txt" : "system-prompt.example.txt");
+    private static string CustomPromptPath => Path.Combine(AppPaths.DataDirectory, $"system-prompt.custom.{Localization.Language}.txt");
+    public string LoadPrompt() => File.Exists(CustomPromptPath) ? File.ReadAllText(CustomPromptPath, Encoding.UTF8)
+        : AppPaths.ReadTemplate(Localization.Language == "ru" ? "system-prompt.ru.example.txt" : "system-prompt.example.txt");
+    public void SavePrompt(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 32000)
+            throw new InvalidOperationException(Localization.Text("Prompt must contain 1–32000 characters.", "Промпт должен содержать от 1 до 32000 символов."));
+        File.WriteAllText(CustomPromptPath + ".tmp", text, Encoding.UTF8);
+        File.Move(CustomPromptPath + ".tmp", CustomPromptPath, true);
+    }
+    public void ResetPrompt() => File.Delete(CustomPromptPath);
 
     private static IEnumerable<(string Key, string Value)> ReadSimpleValues(string path)
     {
