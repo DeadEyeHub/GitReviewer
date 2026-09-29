@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.2.3** uses native model-driven Git tools and requires a
+Version **3.0.1** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.2.3-win-x64.exe
+dist\GitReviewer-3.0.1-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -597,6 +597,40 @@ The WPF project can be built on Linux with `dotnet build`, but running and
 interactively checking the GUI and tray notifications requires Windows.
 
 ## User Data
+
+### SMTP notifications
+
+The **Mail** tab configures the SMTP host/port, `None`, required `StartTls` or
+`SslOnConnect`, optional username/password, sender and semicolon-separated
+recipients. Notifications are disabled by default. **Send test email** sends only
+synthetic text, without repository data. `None` transmits credentials and reports
+unencrypted and asks for confirmation; use it only on a trusted test network.
+TLS modes use normal certificate validation. OAuth is not implemented.
+
+After a successful saved review containing findings, a background service queues
+one message with that commit's Markdown report in the body and as
+`commit-review.md`. It does not attach the accumulated report history. Empty diffs,
+NO_BUGS and incomplete/unstructured reviews do not trigger mail. SMTP failures
+never repeat or invalidate the Git/model review.
+
+`mail-settings.json` stores credentials encrypted with Windows DPAPI for the
+current user. `mail-queue.json` preserves pending reports and delivery identifiers
+across restarts; queued reports contain repository information and should be
+protected like report files. Successful delivery removes the stored report body.
+Automatic retries run after 1, 5 and 15 minutes (four attempts total), with a
+30-second SMTP operation timeout. **Retry failed mail** requeues exhausted entries.
+Disabling mail pauses queued sends; an already sending message may still complete.
+Queued recipients are fixed at enqueue time, even if settings subsequently change.
+
+Deduplication uses repository identity, branch and commit, including manual reviews.
+A stable Message-ID is reused for retries. SMTP cannot guarantee exactly-once
+delivery: loss of the server's final confirmation or a crash before saving delivery
+state can still produce a duplicate. Queue/settings write failures are logged;
+corrupt files are preserved rather than silently overwritten. SMTP protocol traces
+and passwords are not written to logs.
+
+Run isolated queue/credential tests using
+`dotnet run --project GitReviewer.Tests/Mail/Mail.csproj`. They do not send mail.
 
 New journal and detailed-log entries use local computer time in
 `yyyy-MM-dd HH:mm:ss` format, without an offset suffix. Existing log history is

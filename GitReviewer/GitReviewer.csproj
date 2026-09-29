@@ -8,13 +8,17 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>2.2.3</Version>
+    <Version>3.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="models.example.conf" LogicalName="GitReviewer.Templates.models.example.conf" />
     <EmbeddedResource Include="system-prompt.example.txt" LogicalName="GitReviewer.Templates.system-prompt.example.txt" />
     <EmbeddedResource Include="system-prompt.ru.example.txt" LogicalName="GitReviewer.Templates.system-prompt.ru.example.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.18.1" />
   </ItemGroup>
 
 </Project>

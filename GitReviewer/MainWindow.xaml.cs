@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly ReportWriter _reportWriter = new();
     private readonly StateStore _stateStore = new();
     private readonly ReviewRunner _runner;
+    private MailNotifications _mail = null!;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly Forms.ToolStripMenuItem _trayOpenItem;
     private readonly Forms.ToolStripMenuItem _trayStartItem;
@@ -147,6 +148,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _mail = new MailNotifications(AppPaths.DataDirectory, message => AppendLog(message));
         ShowParameters(new ModelParameters());
 
         _runner = new ReviewRunner(
@@ -182,6 +184,7 @@ public partial class MainWindow : Window
         };
         _runner.Progress += AppendProgress;
         _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
+        _runner.Reviewed += _mail.Enqueue;
         _logTimer.Tick += (_, _) => RefreshLogs();
         _logTimer.Start();
         RefreshLogs();
@@ -285,6 +288,7 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        BuildMailPanel();
         ParametersHelpText.Text = Localization.Text(
             "Generation and review limits (per profile). Save to persist. Changes apply to the next review, not a running review. Decimal separator: dot or comma. Limits are shown in brackets.",
             "Генерация и лимиты ревью (для каждого профиля). Нажмите «Сохранить». Изменения применятся к следующей проверке, не к текущей. Дробные числа: точка или запятая. Диапазоны указаны в скобках.");
@@ -1168,6 +1172,7 @@ public partial class MainWindow : Window
         }
         await _runner.StopAsync();
         _logTimer.Stop();
+        await _mail.DisposeAsync();
         RefreshLogs();
         _logWindow?.Close();
         _trayIcon.Visible = false;
@@ -1239,6 +1244,11 @@ public partial class MainWindow : Window
 
     private void RefreshDashboard()
     {
+        if (_mailCounts is not null)
+        {
+            var counts = _mail.Counts();
+            _mailCounts.Text = Localization.Format("Mail queue: {0}; failed: {1}.", "Очередь писем: {0}; не отправлено: {1}.", counts.Pending, counts.Failed);
+        }
         if (_automaticStopPending && !_runner.IsRunning)
         {
             _automaticStopPending = false;

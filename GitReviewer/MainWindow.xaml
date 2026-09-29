@@ -247,6 +247,9 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="MailTab" Header="Mail">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="MailPanel" Margin="16" /></ScrollViewer>
+            </TabItem>
             <TabItem x:Name="PromptTab" Header="System prompt">
                 <Grid Margin="16">
                     <Grid.RowDefinitions>

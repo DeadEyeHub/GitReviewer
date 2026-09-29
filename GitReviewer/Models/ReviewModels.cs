@@ -30,6 +30,8 @@ public sealed record GitRepositoryIdentity(
 public sealed class ReviewResult
 {
     public TimeSpan? AnalysisDuration { get; set; }
+    public string ReportMarkdown { get; set; } = "";
+    public string RepositoryIdentity { get; set; } = "";
     public List<Finding> Findings { get; } = [];
     public string? UnstructuredResponse { get; set; }
     public bool EmptyDiff { get; set; }
@@ -56,4 +58,5 @@ public enum ReviewStage { Started, PreparingDiff, Request, Waiting, Response, Pa
 public sealed record ReviewProgress(ReviewStage Stage, string Model, string Commit, string Detail = "");
 
 public sealed record CommitReviewed(string RepositoryPath, string BranchRef, string Sha,
-    int FindingCount, bool HasUnstructuredResponse, bool EmptyDiff, bool Manual);
+    int FindingCount, bool HasUnstructuredResponse, bool EmptyDiff, bool Manual,
+    string ReportMarkdown = "", string RepositoryIdentity = "");

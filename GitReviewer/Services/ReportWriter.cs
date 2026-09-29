@@ -136,6 +136,8 @@ public sealed class ReportWriter
             await File.WriteAllTextAsync(temporaryPath,
                 existing[..start] + text + existing[end..], Encoding.UTF8, cancellationToken);
             File.Move(temporaryPath, path, true);
+            result.ReportMarkdown = text.ToString();
+            result.RepositoryIdentity = repositoryIdentity ?? repositoryPath;
         }
         finally
         {
