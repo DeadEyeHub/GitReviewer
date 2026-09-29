@@ -60,6 +60,7 @@ public partial class MainWindow : Window
     private readonly System.Diagnostics.Stopwatch _agentClock = new();
     private TimeSpan _agentTimeLimit = ModelClient.ReviewTimeLimit;
     private ModelParameters _editingParameters = new();
+    private bool _automaticStopPending;
 
     public sealed class ParameterRow
     {
@@ -67,6 +68,9 @@ public partial class MainWindow : Window
         public string Value { get; set; } = "";
         public string Help => Property.Name switch
         {
+            nameof(ModelParameters.MaxRetries) => Localization.Text(
+                "Automatic retries after a failed review or preparation/fetch error. 3 means up to 4 attempts including the first; 0 stops after the first failure. Retries wait for the configured polling interval. Success or a different failing commit resets the count. When exhausted, monitoring stops but the app stays open; Start begins a fresh run. Manual review is not retried.",
+                "Автоповторы после ошибки ревью или подготовки/fetch. 3 означает до 4 попыток вместе с первой; 0 — остановка после первой ошибки. Между повторами выдерживается интервал автопроверки. Успех или другой ошибочный коммит сбрасывает счётчик. При исчерпании мониторинг останавливается, приложение остаётся открытым; «Старт» запускает заново. Ручная проверка не повторяется."),
             nameof(ModelParameters.ReviewMinutes) => Localization.Text(
                 "Total time allowed for the model agent to review one commit, including all requests and tool calls. On timeout, the review is incomplete and the branch does not advance.",
                 "Общее время работы агента над одним коммитом, включая все запросы и вызовы инструментов. При превышении проверка считается незавершённой, ветка не продвигается."),
@@ -156,6 +160,7 @@ public partial class MainWindow : Window
             Dispatch(() => SetStatus("Git fetch | " + message));
         };
         _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
+        _runner.AutomaticStopped += () => Dispatch(() => _automaticStopPending = true);
         _runner.CommitChanged += commit =>
         {
             CrashDiagnostics.Context = $"Repository: {_repositoryPath}; branch: {_selectedBranch}; commit: {commit}";
@@ -1234,6 +1239,11 @@ public partial class MainWindow : Window
 
     private void RefreshDashboard()
     {
+        if (_automaticStopPending && !_runner.IsRunning)
+        {
+            _automaticStopPending = false;
+            SetRunningControls(false);
+        }
         var now = DateTimeOffset.Now;
         var tokens = _tokenUsage.Snapshot(_usageCommitKey, now);
         string Count(TokenTally tally)

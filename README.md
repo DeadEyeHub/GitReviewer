@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **2.2.1** uses native model-driven Git tools and requires a
+Version **2.2.2** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-2.2.1-win-x64.exe
+dist\GitReviewer-2.2.2-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -425,6 +425,7 @@ Each review takes its own copy: editing a profile does not alter an active revie
 | Parameter | Default |
 |---|---:|
 | Review time (minutes) | 15 |
+| Automatic retries after failure | 3 (4 attempts including the first) |
 | Temperature / Top P | 0 / 1 |
 | Maximum output tokens (`max_tokens`) | 0: omit, use server default |
 | Model request rounds | 60 |
@@ -440,6 +441,12 @@ provider support and its context limit still apply. Reminders, protocol budget
 text, timeout messages and the Dashboard timer reflect the configured values.
 Internal safety limits (Git subprocess timeout, page sizes, allowed commits and
 path restrictions) are not model-generation settings and remain unchanged.
+
+After the automatic retry budget is exhausted, monitoring stops and Start becomes
+available again; the application stays open. Zero retries stops after the first
+failure. Retries use the normal polling interval and include preparation/fetch
+errors. A successful cycle or a different failing commit resets the counter.
+Starting monitoring again resets it too. Manual reviews are never auto-retried.
 
 Empty changes are detected locally and reported honestly as not sent to the model.
 Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.

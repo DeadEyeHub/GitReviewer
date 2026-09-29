@@ -24,6 +24,7 @@ public sealed class ReviewRunner
     public event Action<string>? Log;
     public event Action<string>? ModelLog;
     public event Action<string>? StatusChanged;
+    public event Action? AutomaticStopped;
     public event Action<string>? CommitChanged;
     public event Action<CommitInfo>? CommitInfoChanged;
     public event Action<ReviewProgress>? Progress;
@@ -58,6 +59,8 @@ public sealed class ReviewRunner
             if (_runTask is { IsCompleted: false } || _stopTask is not null || _manualReviewActive)
                 return false;
 
+            profile.Parameters.Validate();
+            _cancellation?.Dispose();
             _cancellation = new CancellationTokenSource();
             _runTask = RunLoopAsync(settings, profile.Clone(), _cancellation.Token);
             return true;
@@ -171,6 +174,8 @@ public sealed class ReviewRunner
     private async Task RunLoopAsync(AppSettings settings, ModelProfile profile, CancellationToken cancellationToken)
     {
         Log?.Invoke(Localization.Text("Review started.", "Проверка запущена."));
+        var failures = 0;
+        string? failedCommit = null;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -178,6 +183,8 @@ public sealed class ReviewRunner
                 _activeCommit = string.Empty;
                 Publish(RemainingChanged, (int?)null);
                 await RunCycleAsync(settings, profile, cancellationToken);
+                failures = 0;
+                failedCommit = null;
                 StatusChanged?.Invoke(Localization.Format(
                     "Waiting {0} sec.",
                     "Ожидание {0} сек.",
@@ -193,6 +200,24 @@ public sealed class ReviewRunner
                 Emit(ReviewStage.Failed, profile, _activeCommit, exception.Message);
                 StatusChanged?.Invoke(Localization.Text("Error", "Ошибка"));
                 Log?.Invoke(Localization.Format("Error: {0}", "Ошибка: {0}", exception.Message));
+                if (failedCommit != _activeCommit) failures = 0;
+                failedCommit = _activeCommit;
+                failures++;
+                if (failures > profile.Parameters.MaxRetries)
+                {
+                    var message = Localization.Format(
+                        "Automatic review stopped after {0} failed attempts ({1} retries). Press Start to try again.",
+                        "Автопроверка остановлена после {0} неудачных попыток ({1} повторов). Для повторного запуска нажмите «Старт».",
+                        failures, profile.Parameters.MaxRetries);
+                    Log?.Invoke(message);
+                    StatusChanged?.Invoke(message);
+                    Publish(NextRunChanged, (DateTimeOffset?)null);
+                    Publish(RemainingChanged, (int?)null);
+                    AutomaticStopped?.Invoke();
+                    return;
+                }
+                Log?.Invoke(Localization.Format("Retry {0} of {1} after {2} seconds.",
+                    "Повторная попытка {0} из {1} через {2} сек.", failures, profile.Parameters.MaxRetries, settings.PollIntervalSeconds));
             }
 
             Publish(NextRunChanged, (DateTimeOffset?)DateTimeOffset.Now.AddSeconds(settings.PollIntervalSeconds));
