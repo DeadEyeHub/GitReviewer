@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private readonly ReviewRunner _runner;
     private MailNotifications _mail = null!;
     private readonly Forms.NotifyIcon _trayIcon;
+    private readonly Icon _trayImage;
     private readonly Forms.ToolStripMenuItem _trayOpenItem;
     private readonly Forms.ToolStripMenuItem _trayStartItem;
     private readonly Forms.ToolStripMenuItem _trayStopItem;
@@ -233,9 +234,15 @@ public partial class MainWindow : Window
             (_, _) => Dispatch(async () => await ExitApplicationAsync()));
         trayMenu.Items.Add(_trayExitItem);
 
+        using (var iconStream = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Assets/app.ico")).Stream)
+        using (var icon = new Icon(iconStream, Forms.SystemInformation.SmallIconSize))
+        {
+            _trayImage = (Icon)icon.Clone();
+        }
         _trayIcon = new Forms.NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = _trayImage,
             Text = "Git Reviewer - stopped",
             Visible = true,
             ContextMenuStrip = trayMenu
@@ -1220,6 +1227,7 @@ public partial class MainWindow : Window
         _logWindow?.Close();
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _trayImage.Dispose();
         System.Windows.Application.Current.Shutdown();
     }
 

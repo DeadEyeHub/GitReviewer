@@ -1,7 +1,7 @@
 <Window x:Class="GitReviewer.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Git Reviewer" Height="720" Width="960"
+        Title="Git Reviewer" Height="720" Width="960" Icon="Assets/app.ico"
         MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="16">

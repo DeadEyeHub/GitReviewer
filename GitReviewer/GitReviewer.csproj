@@ -9,9 +9,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <Version>3.0.1</Version>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\app.ico" />
     <EmbeddedResource Include="models.example.conf" LogicalName="GitReviewer.Templates.models.example.conf" />
     <EmbeddedResource Include="system-prompt.example.txt" LogicalName="GitReviewer.Templates.system-prompt.example.txt" />
     <EmbeddedResource Include="system-prompt.ru.example.txt" LogicalName="GitReviewer.Templates.system-prompt.ru.example.txt" />
