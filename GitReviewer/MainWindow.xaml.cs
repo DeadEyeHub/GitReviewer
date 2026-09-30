@@ -276,6 +276,7 @@ public partial class MainWindow : Window
         RepositoryPathTextBox.Text = settings.RepositoryPath;
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
+        FetchSubmodulesCheckBox.IsChecked = settings.FetchSubmodules;
         SshKeyPathTextBox.Text = settings.SshPrivateKeyPath;
         PlinkPathTextBox.Text = settings.PlinkPath;
         _loadingAuthentication = false;
@@ -323,6 +324,8 @@ public partial class MainWindow : Window
         BrowseButton.Content = Localization.Text("Browse...", "Обзор...");
         IntervalLabel.Text = Localization.Text("Interval, seconds", "Интервал, секунд");
         ReceiveChangesLabel.Text = Localization.Text("Receive changes", "Получение изменений");
+        FetchSubmodulesCheckBox.Content = Localization.Text("Fetch initialized submodules on demand", "Получать изменения инициализированных сабмодулей при необходимости");
+        FetchSubmodulesCheckBox.ToolTip = Localization.Text("Requires fetch above. Uses configured submodule remotes; may connect to other servers using the selected credentials. Enable only for trusted repositories. Does not clone uninitialized modules.", "Требует включённого fetch. Использует настроенные remote сабмодулей: возможны подключения к другим серверам с выбранными учётными данными. Только для доверенных репозиториев. Не клонирует неинициализированные сабмодули.");
         PullEnabledCheckBox.Content = Localization.Text(
             "Run git fetch before each check",
             "Выполнять git fetch перед каждой проверкой");
@@ -1121,6 +1124,7 @@ public partial class MainWindow : Window
             BranchRef = _selectedBranch,
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
+            FetchSubmodules = FetchSubmodulesCheckBox.IsChecked == true,
             Language = Localization.Language,
             GitAuthenticationMode = GetAuthenticationMode(),
             SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim(),

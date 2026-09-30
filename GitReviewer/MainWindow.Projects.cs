@@ -43,6 +43,7 @@ public partial class MainWindow
         _configuration.SaveSettings(new AppSettings {
             RepositoryPath = RepositoryPathTextBox.Text.Trim(), BranchRef = _selectedBranch,
             PollIntervalSeconds = interval, PullEnabled = PullEnabledCheckBox.IsChecked == true,
+            FetchSubmodules = FetchSubmodulesCheckBox.IsChecked == true,
             Language = Localization.Language, GitAuthenticationMode = _authenticationNeedsDetection ? "auto" : GetAuthenticationMode(),
             SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim(), PlinkPath = PlinkPathTextBox.Text.Trim()
         });

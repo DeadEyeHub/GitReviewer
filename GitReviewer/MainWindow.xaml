@@ -93,6 +93,7 @@
                     <TextBlock x:Name="ReceiveChangesLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Receive changes" />
                     <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,7,0,12">
                         <CheckBox x:Name="PullEnabledCheckBox" Content="Fetch before each check" />
+                        <CheckBox x:Name="FetchSubmodulesCheckBox" Margin="0,5,0,0" Content="Fetch initialized submodules on demand" />
                         <TextBlock x:Name="PullExplanationTextBlock" Margin="0,5,0,0" Foreground="#666" TextWrapping="Wrap"
                                    Text="Fetch updates remote-tracking refs, never the checkout. Local branches are read as-is." />
                     </StackPanel>

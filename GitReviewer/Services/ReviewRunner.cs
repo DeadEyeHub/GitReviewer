@@ -251,6 +251,7 @@ public sealed class ReviewRunner
             var fetchSettings = new AppSettings
             {
                 BranchRef = branch,
+                FetchSubmodules = settings.FetchSubmodules,
                 GitAuthenticationMode = settings.GitAuthenticationMode,
                 SshPrivateKeyPath = settings.SshPrivateKeyPath,
                 PlinkPath = settings.PlinkPath

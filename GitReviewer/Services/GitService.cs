@@ -193,12 +193,16 @@ public sealed class GitService
             // git-common-dir avoids competing ref/object updates while Git reuses objects.
             activity?.Invoke(Localization.Format("Fetching {0} from remote {1}.", "Fetch: получение {0} из remote {1}.", resolvedRemote.MergeReference, resolvedRemote.Name));
             GitResult result;
+            var recurse = settings.FetchSubmodules ? "--recurse-submodules=on-demand" : "--no-recurse-submodules";
+            activity?.Invoke(settings.FetchSubmodules
+                ? Localization.Text("Fetch: initialized submodules on demand; no automatic initialization.", "Fetch: инициализированные сабмодули по необходимости; без автоматической инициализации.")
+                : Localization.Text("Fetch: submodule network access disabled.", "Fetch: сетевое получение сабмодулей отключено."));
             if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
                 result = await RunWithAuthenticationAsync(repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken,
-                    "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
+                    "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", recurse, "--refmap=", "--", resolvedRemote.Name, resolvedRemote.MergeReference);
             else
                 result = await RunWithAuthenticationAsync(
-                    repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken, "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules",
+                    repositoryPath, IsLocalRemote(resolvedRemote.Url) ? null : settings, cancellationToken, "fetch", "--progress", "--no-tags", "--no-prune", "--no-prune-tags", recurse,
                     "--refmap=", "--", resolvedRemote.Name, $"+{resolvedRemote.MergeReference}:{branch}");
             if (result.ExitCode == 0)
             {
@@ -852,6 +856,10 @@ public sealed class GitService
             "merge", "--ff-only", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "--", target);
         if (await GetBranchHeadAsync(path, branch, token) != target)
             throw new GitException("Branch tip changed during fast-forward; stop concurrent Git operations.");
+        // Only already initialized modules, exact gitlink targets, no force, hooks or network.
+        // A failed checkout is surfaced; never hide dirty/missing module state.
+        await RunRequiredAsync(path, token, "-c", "protocol.allow=never", "-c", "core.hooksPath=/dev/null",
+            "submodule", "update", "--no-fetch", "--checkout", "--recursive");
     }
 
     private static string NormalizePath(string path) =>

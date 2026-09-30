@@ -1,6 +1,6 @@
 # Git Reviewer
 
-Version **3.0.1** uses native model-driven Git tools and requires a
+Version **3.1.0** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
 Git Reviewer is a Windows desktop application that uses a local or cloud
@@ -105,7 +105,7 @@ To create one versioned, self-contained Windows x64 executable, run:
 The result is written to:
 
 ```text
-dist\GitReviewer-3.0.1-win-x64.exe
+dist\GitReviewer-3.1.0-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -685,6 +685,45 @@ reports\             Markdown review reports
 ```
 
 These files are not committed to Git.
+
+## Submodules
+
+Review understands Git `160000` gitlink entries, including additions, deletions,
+pointer updates across several commits, and nested changes (up to 8 levels).
+The main `git_diff` response lists changed submodules with their exact old/new SHAs.
+The agent must read every listed module's complete diff using the `submodule`
+argument, including nested entries. A parent-only diff cannot produce a successful
+final review. Findings inside modules use full paths such as `lib/src/file.cs`.
+
+All six Git tools accept `submodule`; file/tree/search paths are then relative to
+that module. Only the two pinned gitlink commits are allowed, not their arbitrary
+ancestors. A pointer update is compared across its entire old-to-new range; adding
+or deleting a module compares against the empty tree. Working-copy contents are
+never used as review evidence. Child snapshots share the main session's disk budget.
+
+Modules must be initialized locally at their repository paths. Missing directories,
+missing pinned objects, symlink/junction module paths or excessive nesting produce
+an incomplete review, not a clean result. Renamed/deleted modules must still have
+their local repositories available at the historical paths to inspect removed code.
+Only changed modules are exposed to the model in this version.
+
+**Fetch initialized submodules on demand** is a per-project opt-in, disabled by
+default. With the main fetch checkbox enabled it uses Git's recursive on-demand
+fetch for initialized modules; the existing Git transfer log and timeout apply.
+It can contact different configured remotes using the selected credentials: enable
+it only for trusted repositories. It never automatically initializes/clones a new
+module. With fetch disabled, review is local-only. Missing historical objects may
+still require fetching the affected module manually.
+
+After a clean local branch advances, initialized modules are checked out to their
+pinned commits recursively, with `--no-fetch --checkout`, no force and hooks/network
+disabled. Dirty modules still block advancement; changes are never stashed or
+discarded. If module checkout fails after the parent fast-forward, the error is
+shown and monitoring must resolve the working-copy state before continuing.
+
+For a trusted repository, initialize modules yourself with
+`git submodule update --init --recursive` before review. This command may download
+repositories and change their working files; check local changes and URLs first.
 
 ## Multiple projects
 

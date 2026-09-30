@@ -15,10 +15,22 @@ public sealed class GitToolSession : IDisposable
     private readonly Dictionary<string, FileStream> _snapshots = new(StringComparer.Ordinal);
     private long _diskLimit = ReadDiskLimit();
     private bool _disposed;
+    private const string EmptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    private readonly Dictionary<string, GitToolSession> _submodules = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string? Old, string? New)> _links = new(StringComparer.Ordinal);
+    private bool _linksLoaded;
+    private bool _rangeDiff;
+    private bool _deleted;
+    private int _depth;
+    private string _modulePath = "";
+    private GitToolSession? _budgetRoot;
+    private long SnapshotBytes => _snapshots.Values.Sum(s => s.Length) + _submodules.Values.Sum(s => s.SnapshotBytes);
     private static long ReadDiskLimit() => int.TryParse(Environment.GetEnvironmentVariable("GITREVIEWER_SNAPSHOT_MB"), out var mb)
         && mb is >= 1 and <= 1024 ? mb * 1024L * 1024 : 64 * 1024L * 1024;
     public void Dispose()
     {
+        foreach (var module in _submodules.Values) module.Dispose();
+        _submodules.Clear();
         foreach (var snapshot in _snapshots.Values) snapshot.Dispose();
         _snapshots.Clear();
         _disposed = true;
@@ -26,7 +38,8 @@ public sealed class GitToolSession : IDisposable
     private readonly string? _parent;
     public string Sha { get; }
     public bool DiffComplete { get; private set; }
-    public bool ReadyForFinal => DiffComplete;
+    public bool ReadyForFinal => DiffComplete && _linksLoaded && _links.Keys.All(path =>
+        _submodules.TryGetValue(path, out var child) && child.ReadyForFinal);
 
     private GitToolSession(string repository, string sha, string? parent)
     {
@@ -63,7 +76,10 @@ public sealed class GitToolSession : IDisposable
         return session;
     }
 
-    private string[] DiffArguments(bool names) => _parent is null
+    private string[] DiffArguments(bool names) => _rangeDiff
+        ? ["diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=none", "--submodule=short",
+            names ? "--name-status" : "--patch", names ? "--no-color" : "--unified=5", _parent ?? EmptyTree, _deleted ? EmptyTree : Sha, "--"]
+        : _parent is null
         ? ["diff-tree", "--root", "--no-commit-id", "-r", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=none", "--submodule=short",
             names ? "--name-status" : "--patch", names ? "--no-color" : "--unified=5", Sha, "--"]
         : ["diff", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--ignore-submodules=none", "--submodule=short",
@@ -82,7 +98,8 @@ public sealed class GitToolSession : IDisposable
     {
         var properties = new Dictionary<string, object>
         {
-            ["commit"] = new { type = "string", description = "Only reviewed SHA or its immediate first parent; defaults to reviewed SHA." }
+            ["submodule"] = new { type = "string", description = "Optional submodule path relative to the main repository, as listed in submodules results. Nested modules use full paths. Tools then operate in that repository, restricted to pinned old/new gitlink SHAs. Paths inside it are relative to the submodule." },
+            ["commit"] = new { type = "string", description = "Main repository: reviewed SHA or first parent. With submodule: only its listed old_sha/new_sha; default new_sha (old_sha for deletion). Never arbitrary ancestors." }
         };
         if (name != "git_metadata")
             properties["offset"] = new { type = "integer", minimum = 0, maximum = int.MaxValue, description = "Initially 0; follow next_offset with the same arguments." };
@@ -154,6 +171,15 @@ public sealed class GitToolSession : IDisposable
         foreach (var property in args.EnumerateObject())
             if (!seen.Add(property.Name) || !Properties(name).ContainsKey(property.Name))
                 throw new ArgumentException("Unknown or duplicate argument.");
+        if (args.TryGetProperty("submodule", out var moduleProperty))
+        {
+            var modulePath = moduleProperty.GetString();
+            ValidateModulePath(modulePath);
+            var target = await ResolveSubmoduleAsync(modulePath!, token, trace);
+            var forwarded = args.EnumerateObject().Where(p => p.Name != "submodule")
+                .ToDictionary(p => p.Name, p => p.Value.Clone());
+            return await target.ExecuteAsync(name, JsonSerializer.Serialize(forwarded), token, trace);
+        }
         var commit = args.TryGetProperty("commit", out var c) ? c.GetString() : Sha;
         if (commit is null || !_commits.Contains(commit)) throw new ArgumentException("Only the reviewed SHA and its immediate first parent are allowed. Older history and other merge parents are prohibited.");
         var offset = args.TryGetProperty("offset", out var o) ? o.GetInt32() : 0;
@@ -168,6 +194,7 @@ public sealed class GitToolSession : IDisposable
             throw new ArgumentException("Use an exact relative Git path without traversal or revision syntax.");
         if (name == "git_metadata" && offset != 0)
             throw new ArgumentException("Metadata does not support paging.");
+        if (name == "git_diff") await LoadSubmodulesAsync(token, trace);
         var query = args.TryGetProperty("query", out var q) ? q.GetString() : null;
         if (name == "git_search" && (string.IsNullOrEmpty(query) || query.Length > 1024 || query.Any(char.IsControl)))
             throw new ArgumentException("Use a nonempty literal search query without control characters, up to 1024 characters.");
@@ -217,7 +244,7 @@ public sealed class GitToolSession : IDisposable
             "git_diff" => DiffArguments(false),
             "git_tree" => (recursive ? new[] { "ls-tree", "-r", "--full-tree", commit, "--" } : new[] { "ls-tree", "--full-tree", commit, "--" })
                 .Concat(path is null ? Array.Empty<string>() : new[] { path + "/" }).ToArray(),
-            "git_search" => new[] { "grep", "--no-color", "--no-ext-grep", "--no-textconv", "-I", "-n", "-F", "-e", query!, commit, "--" }
+            "git_search" => new[] { "grep", "--no-recurse-submodules", "--no-color", "--no-ext-grep", "--no-textconv", "-I", "-n", "-F", "-e", query!, commit, "--" }
                 .Concat(path is null ? Array.Empty<string>() : new[] { path }).ToArray(),
             _ => new[] { "cat-file", "blob", commit + ":" + path }
         };
@@ -231,7 +258,8 @@ public sealed class GitToolSession : IDisposable
                     FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.DeleteOnClose);
                 try
                 {
-                    var available = _diskLimit - _snapshots.Values.Sum(value => value.Length);
+                    var budget = _budgetRoot ?? this;
+                    var available = budget._diskLimit - budget.SnapshotBytes;
                     var captured = await GitService.CaptureSnapshotAsync(_repository, snapshot,
                         (int)(available / 2), token, trace, command);
                     if (captured.HasMore)
@@ -294,8 +322,76 @@ public sealed class GitToolSession : IDisposable
             commit,
             offset,
             next_offset = result.HasMore ? (int?)next : null,
-            content = result.Output
+            content = result.Output,
+            submodules = _links.Select(link => new { path = _modulePath + link.Key, old_sha = link.Value.Old, new_sha = link.Value.New,
+                required = true, instruction = "Read git_diff with submodule set to this path, through every page. Prefix finding paths with the full submodule path. Missing local objects make the review incomplete." }).ToArray()
         });
+    }
+
+    private static void ValidateModulePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || path.Length > 2048 || path.Any(char.IsControl) ||
+            path.Contains('\\') || path.Contains(':') || path.Split('/').Any(p => p is "" or "." or ".."))
+            throw new ArgumentException("Use a literal repository-relative submodule path without traversal.");
+    }
+
+    private async Task LoadSubmodulesAsync(CancellationToken token, Action<GitCommandTrace>? trace)
+    {
+        if (_linksLoaded) return;
+        var before = _parent ?? EmptyTree;
+        var after = _deleted ? EmptyTree : Sha;
+        var raw = await GitService.ReadPageAsync(_repository, 0, 2_000_000, token, trace,
+            "diff", "--raw", "-z", "--no-abbrev", "--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", before, after, "--");
+        if (raw.ExitCode != 0 || raw.HasMore) throw new GitException("Cannot enumerate complete submodule changes locally; review incomplete. " + raw.Error);
+        var records = raw.Output.Split('\0');
+        var links = new Dictionary<string, (string? Old, string? New)>(StringComparer.Ordinal);
+        for (var i = 0; i + 1 < records.Length; i += 2)
+        {
+            var fields = records[i].Split(' ');
+            if (fields.Length != 5) throw new GitException("Invalid raw Git diff record.");
+            if (fields[0] != ":160000" && fields[1] != "160000") continue;
+            ValidateModulePath(records[i + 1]);
+            links.Add(records[i + 1], (fields[0] == ":160000" ? fields[2] : null, fields[1] == "160000" ? fields[3] : null));
+        }
+        foreach (var link in links) _links.Add(link.Key, link.Value);
+        _linksLoaded = true;
+    }
+
+    private async Task<GitToolSession> ResolveSubmoduleAsync(string path, CancellationToken token, Action<GitCommandTrace>? trace)
+    {
+        await LoadSubmodulesAsync(token, trace);
+        var prefix = _links.Keys.Where(p => path == p || path.StartsWith(p + "/", StringComparison.Ordinal))
+            .OrderByDescending(p => p.Length).FirstOrDefault();
+        if (prefix is null) throw new ArgumentException("Only submodules changed in the reviewed gitlink range are available. Read git_diff for their paths.");
+        if (!_submodules.TryGetValue(prefix, out var child))
+        {
+            if (_depth >= 8) throw new GitException("Submodule nesting exceeds 8 levels; review incomplete.");
+            var directory = _repository;
+            foreach (var part in prefix.Split('/'))
+            {
+                directory = Path.Combine(directory, part);
+                if (!Directory.Exists(directory) || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    throw new GitException($"Submodule '{prefix}' is not initialized locally or uses a symlink/junction. Initialize it manually and fetch its pinned commits; review incomplete.");
+            }
+            var root = await GitService.ReadPageAsync(directory, 0, PageSize, token, trace, "rev-parse", "--show-toplevel");
+            if (root.ExitCode != 0 || root.HasMore || !Path.GetFullPath(root.Output.TrimEnd('\r', '\n')).Equals(Path.GetFullPath(directory),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new GitException($"Submodule '{prefix}' has no initialized Git repository; initialize it manually. No automatic clone is permitted.");
+            var link = _links[prefix];
+            foreach (var sha in new[] { link.Old, link.New }.Where(s => s is not null).Distinct())
+            {
+                var type = await GitService.ReadPageAsync(directory, 0, 32, token, trace, "cat-file", "-t", sha!);
+                if (type.ExitCode != 0 || type.Output.Trim() != "commit")
+                    throw new GitException($"Submodule '{prefix}': pinned commit {sha} is unavailable locally. Fetch this submodule manually and retry; review incomplete.");
+            }
+            child = new GitToolSession(directory, link.New ?? link.Old!, link.Old) {
+                _rangeDiff = true, _deleted = link.New is null, _depth = _depth + 1, _budgetRoot = _budgetRoot ?? this,
+                _diskLimit = (_budgetRoot ?? this)._diskLimit,
+                _modulePath = _modulePath + prefix + "/"
+            };
+            _submodules.Add(prefix, child);
+        }
+        return path == prefix ? child : await child.ResolveSubmoduleAsync(path[(prefix.Length + 1)..], token, trace);
     }
 
     private async Task<string> ReadHexAsync(string commit, string path, int offset, int count, CancellationToken token, Action<GitCommandTrace>? trace)

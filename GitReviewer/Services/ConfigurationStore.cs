@@ -80,6 +80,9 @@ public sealed class ConfigurationStore
                 case "language":
                     settings.Language = value.Equals("ru", StringComparison.OrdinalIgnoreCase) ? "ru" : "en";
                     break;
+                case "fetch_submodules" when bool.TryParse(value, out var modules):
+                    settings.FetchSubmodules = modules;
+                    break;
                 case "git_authentication_mode":
                     settings.GitAuthenticationMode = value is "ssh-agent" or "ssh-key" or "putty-key" or "https"
                         ? value
@@ -113,6 +116,7 @@ public sealed class ConfigurationStore
             .AppendLine($"branch_ref={settings.BranchRef}")
             .AppendLine($"poll_interval_seconds={settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture)}")
             .AppendLine($"pull_enabled={settings.PullEnabled.ToString().ToLowerInvariant()}")
+            .AppendLine($"fetch_submodules={settings.FetchSubmodules.ToString().ToLowerInvariant()}")
             .AppendLine($"language={settings.Language}")
             .AppendLine($"git_authentication_mode={settings.GitAuthenticationMode}")
             .AppendLine($"ssh_private_key_path={settings.SshPrivateKeyPath}")

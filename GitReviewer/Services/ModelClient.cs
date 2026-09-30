@@ -102,6 +102,7 @@ public sealed class ModelClient
             git_file status=not_found means the path is absent at that SHA, not a failed review. It may predate addition or use an older name.
             Inspect the tree at the reviewed SHA or immediate first parent; never search older history or substitute working-copy code.
             Read git_diff from offset 0 through every next_offset until null before concluding. Only diff pages are mandatory.
+            Git results may list changed submodules with pinned old_sha/new_sha. Read git_diff for EACH listed submodule using the submodule argument, including nested entries, through all pages. The comparison is between the two gitlinks, not the submodule commit's own parent. Use submodule with git_file/git_tree/git_search to inspect pinned contents; never substitute working files or investigate earlier history. Prefix FILE findings with the full submodule path. All submodule diffs are mandatory; unavailable local objects make this review incomplete.
             Auxiliary tree, search and file pages may be stopped when sufficient relevant context has been read.
             Previously read page offsets may be requested again, including offset 0 after EOF. Re-reading does not reset progress.
             Use git_tree to browse directory children (recursive=false by default). Scope tree/search with path to avoid unrelated output.
@@ -274,7 +275,7 @@ public sealed class ModelClient
                 if (!tools.ReadyForFinal || unresolvedErrors.Count > 0)
                 {
                     messages.Add(new { role = "assistant", content });
-                    messages.Add(new { role = "user", content = "Review incomplete. Read the full git_diff through all its next_offset pages; correct invalid tool arguments before returning the report. Auxiliary pages are optional. Providers must support native tool_calls (vLLM: auto tool choice and a model-specific tool-call parser)." });
+                    messages.Add(new { role = "user", content = "Review incomplete. Read the full git_diff through all its next_offset pages, including git_diff with submodule for EACH changed submodule listed by previous results (and nested entries); correct invalid tool arguments before returning the report. Auxiliary pages are optional. Providers must support native tool_calls (vLLM: auto tool choice and a model-specific tool-call parser)." });
                     continue;
                 }
                 var formatErrors = GetReportFormatErrors(content);
