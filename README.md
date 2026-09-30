@@ -1,5 +1,7 @@
 # Git Reviewer
 
+<img src="GitReviewer/Assets/app-icon.png" alt="Git Reviewer logo" width="160" />
+
 Version **3.1.0** uses native model-driven Git tools and requires a
 tool-capable model/provider. There is no legacy diff-prompt fallback.
 
