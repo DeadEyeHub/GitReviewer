@@ -622,8 +622,11 @@ unencrypted and asks for confirmation; use it only on a trusted test network.
 TLS modes use normal certificate validation. OAuth is not implemented.
 
 After a successful saved review containing findings, a background service queues
-one message with that commit's Markdown report in the body and as
-`commit-review.md`. It does not attach the accumulated report history.
+one message with that commit's report rendered as HTML in the body and attached as
+`commit-review.html`, with a plain-text fallback. Repository/model text is HTML-escaped;
+scripts, remote images and raw HTML are not executed. Existing queued Markdown reports
+are converted at delivery time. Local reports remain Markdown.
+It does not attach the accumulated report history.
 **Send even without bugs** also enables notifications for successful NO_BUGS and
 empty-diff reviews. Incomplete/unstructured reviews and timeouts never trigger mail.
 **Send to commit author** adds the Git author email, deduplicated against configured

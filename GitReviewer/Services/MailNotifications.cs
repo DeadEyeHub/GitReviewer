@@ -235,16 +235,48 @@ public sealed class MailNotifications : IAsyncDisposable
         { "None" => SecureSocketOptions.None, "SslOnConnect" => SecureSocketOptions.SslOnConnect, _ => SecureSocketOptions.StartTls }, timeout.Token);
         if (!string.IsNullOrWhiteSpace(settings.Username))
             await client.AuthenticateAsync(settings.Username, settings.GetPassword(), timeout.Token);
-        using var message = new MimeMessage { Subject = job.Subject, MessageId = job.MessageId, Date = DateTimeOffset.Now };
-        message.From.Add(MailboxAddress.Parse(job.From));
-        foreach (var address in job.Recipients.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            message.To.Add(MailboxAddress.Parse(address));
-        var body = new BodyBuilder { TextBody = job.Report };
-        body.Attachments.Add("commit-review.md", Encoding.UTF8.GetBytes(job.Report), new ContentType("text", "markdown"));
-        message.Body = body.ToMessageBody();
+        using var message = CreateMessage(job);
         await client.SendAsync(message, timeout.Token);
         // Once accepted, a disconnect failure must not schedule a duplicate.
         try { await client.DisconnectAsync(true, timeout.Token); } catch { }
+    }
+
+    public static MimeMessage CreateMessage(MailJob job)
+    {
+        var message = new MimeMessage { Subject = job.Subject, MessageId = job.MessageId, Date = DateTimeOffset.Now };
+        message.From.Add(MailboxAddress.Parse(job.From));
+        foreach (var address in job.Recipients.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            message.To.Add(MailboxAddress.Parse(address));
+        var html = RenderHtml(job.Report);
+        var body = new BodyBuilder { TextBody = job.Report, HtmlBody = html };
+        body.Attachments.Add("commit-review.html", Encoding.UTF8.GetBytes(html), new ContentType("text", "html"));
+        message.Body = body.ToMessageBody();
+        return message;
+    }
+
+    public static string RenderHtml(string report)
+    {
+        var html = new StringBuilder("<!doctype html><html><head><meta charset=\"utf-8\"></head><body style=\"font-family:Segoe UI,Arial,sans-serif;color:#202124;line-height:1.5;max-width:960px;margin:24px\">");
+        var fenced = false;
+        foreach (var raw in report.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (raw.StartsWith("```", StringComparison.Ordinal))
+            {
+                html.Append(fenced ? "</code></pre>" : "<pre style=\"white-space:pre-wrap;background:#f3f5f7;padding:12px\"><code>");
+                fenced = !fenced;
+                continue;
+            }
+            if (!fenced && raw.StartsWith("<!--", StringComparison.Ordinal)) continue;
+            var encoded = System.Net.WebUtility.HtmlEncode(raw);
+            if (fenced) { html.Append(encoded).Append('\n'); continue; }
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var level = raw.TakeWhile(c => c == '#').Count();
+            if (level is >= 1 and <= 3 && raw.Length > level && raw[level] == ' ')
+                html.Append($"<h{level}>").Append(System.Net.WebUtility.HtmlEncode(raw[(level + 1)..].Replace("`", ""))).Append($"</h{level}>");
+            else html.Append("<p style=\"margin:6px 0;white-space:pre-wrap\">").Append(encoded).Append("</p>");
+        }
+        if (fenced) html.Append("</code></pre>");
+        return html.Append("</body></html>").ToString();
     }
     public async ValueTask DisposeAsync()
     {
