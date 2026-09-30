@@ -8,7 +8,54 @@ public sealed class ConfigurationStore
 {
     public ConfigurationStore() => AppPaths.EnsureCreated();
 
-    public AppSettings LoadSettings()
+    private static string ProjectsPath => Path.Combine(AppPaths.DataDirectory, "projects.json");
+
+    public ProjectCatalog LoadProjects()
+    {
+        if (!File.Exists(ProjectsPath))
+            return new ProjectCatalog { Projects = [LoadLegacySettings()] };
+        var catalog = System.Text.Json.JsonSerializer.Deserialize<ProjectCatalog>(File.ReadAllText(ProjectsPath))
+            ?? throw new InvalidDataException("Invalid project catalog.");
+        ValidateProjects(catalog);
+        return catalog;
+    }
+
+    private static void ValidateProjects(ProjectCatalog catalog)
+    {
+        if (catalog.Version != 1 || catalog.Projects is null || catalog.Projects.Count == 0 ||
+            catalog.ActiveIndex < 0 || catalog.ActiveIndex >= catalog.Projects.Count ||
+            catalog.Projects.Any(p => p is null || p.RepositoryPath is null || p.BranchRef is null))
+            throw new InvalidDataException("Invalid project catalog. The existing file has been preserved.");
+    }
+
+    public void SaveProjects(ProjectCatalog catalog)
+    {
+        ValidateProjects(catalog);
+        var path = ProjectsPath;
+        using (var stream = new FileStream(path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            System.Text.Json.JsonSerializer.Serialize(stream, catalog);
+            stream.Flush(true);
+        }
+        File.Move(path + ".tmp", path, true);
+    }
+
+    public void InitializeProjects()
+    {
+        var catalog = LoadProjects();
+        if (!File.Exists(ProjectsPath)) SaveProjects(catalog);
+    }
+
+    public AppSettings LoadSettings() => File.Exists(ProjectsPath)
+        ? LoadActiveProject() : LoadLegacySettings();
+
+    private AppSettings LoadActiveProject()
+    {
+        var catalog = LoadProjects();
+        return catalog.Projects[catalog.ActiveIndex];
+    }
+
+    private AppSettings LoadLegacySettings()
     {
         var settings = new AppSettings();
         if (!File.Exists(AppPaths.SettingsConfig))
@@ -52,6 +99,15 @@ public sealed class ConfigurationStore
 
     public void SaveSettings(AppSettings settings)
     {
+        if (File.Exists(ProjectsPath))
+        {
+            var catalog = LoadProjects();
+            catalog.Projects[catalog.ActiveIndex] = settings;
+            // Interface language is application-wide, unlike Git/repository settings.
+            foreach (var project in catalog.Projects) project.Language = settings.Language;
+            SaveProjects(catalog);
+            return;
+        }
         var text = new StringBuilder()
             .AppendLine($"repository_path={settings.RepositoryPath}")
             .AppendLine($"branch_ref={settings.BranchRef}")

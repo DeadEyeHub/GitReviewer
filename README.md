@@ -686,6 +686,29 @@ reports\             Markdown review reports
 
 These files are not committed to Git.
 
+## Multiple projects
+
+The bottom navigation is shared by all tabs: numbered buttons select saved projects,
+**+** adds a project and **−** removes it from the list after confirmation. Hover a
+number to see its repository and branch. Removing an entry never deletes repository
+files, reports, queued mail or review progress.
+
+Each project stores its repository, branch, polling interval, fetch flag and Git
+authentication settings. Changes are saved when switching or exiting. The selected
+project survives restart. On first launch, `settings.conf` is imported as project 1
+into an atomically saved `projects.json`; the legacy file is left unchanged.
+Corrupt or unsupported project catalogs are not silently overwritten.
+
+One project is reviewed at a time. Switching a running automatic review requires
+confirmation and awaits its stop; a manual review must finish before switching.
+The new selection does not start automatically. Review positions and reports remain
+keyed by repository Git identity and branch, so two entries for the same repository
+and branch share progress. Model profiles, SMTP settings, prompts, language, the
+journal and daily/all-time token totals are application-wide.
+
+Run migration checks with `dotnet run --project GitReviewer.Tests/PromptMigration/PromptMigration.csproj`
+and isolated UI switching/layout checks with `dotnet run --project GitReviewer.Tests/ProjectsUi/ProjectsUi.csproj`.
+
 ## Language
 
 Select English or Russian on the **Project** tab. The choice is saved in

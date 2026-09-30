@@ -1,5 +1,12 @@
 namespace GitReviewer.Models;
 
+public sealed class ProjectCatalog
+{
+    public int Version { get; set; } = 1;
+    public int ActiveIndex { get; set; }
+    public List<AppSettings> Projects { get; set; } = [];
+}
+
 public sealed class AppSettings
 {
     public string RepositoryPath { get; set; } = string.Empty;

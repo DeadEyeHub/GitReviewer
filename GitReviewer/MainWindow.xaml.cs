@@ -148,6 +148,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _configuration.InitializeProjects();
         _mail = new MailNotifications(AppPaths.DataDirectory, message => AppendLog(message));
         ShowParameters(new ModelParameters());
 
@@ -262,12 +263,15 @@ public partial class MainWindow : Window
 
     private void LoadSettings(AppSettings settings)
     {
+        _loadingRepository = true;
+        _loadingAuthentication = true;
         _selectedBranch = settings.BranchRef;
         RepositoryPathTextBox.Text = settings.RepositoryPath;
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
         SshKeyPathTextBox.Text = settings.SshPrivateKeyPath;
         PlinkPathTextBox.Text = settings.PlinkPath;
+        _loadingAuthentication = false;
         _loadingRepository = false;
         if (settings.RepositoryPath.Length > 0)
             _ = RefreshRepositoryInfoAsync();
@@ -288,6 +292,7 @@ public partial class MainWindow : Window
 
     private void ApplyLanguage()
     {
+        RenderProjectButtons();
         SaveCustomPromptButton.Content = Localization.Text("Save custom prompt", "Сохранить свой промпт");
         ResetCustomPromptButton.Content = Localization.Text("Use built-in prompt", "Использовать встроенный");
         BuildMailPanel();
@@ -740,6 +745,7 @@ public partial class MainWindow : Window
             _repositoryWasKnown = remote.Length == 0 ||
                 wasKnown && !_repositoriesAwaitingTest.Contains(identity.CommonGitDirectory);
             _repositoryReady = true;
+            RenderProjectButtons();
             UpdateStartCommitButton();
         }
         catch (Exception exception)
@@ -897,7 +903,7 @@ public partial class MainWindow : Window
 
     private async void ReviewCommit_Click(object sender, RoutedEventArgs e)
     {
-        if (_exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
+        if (_switchingProject || _exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
             return;
 
         try
@@ -1033,7 +1039,7 @@ public partial class MainWindow : Window
     private async Task StartReviewAsync()
     {
         var repositoryVersion = _repositoryVersion;
-        if (_exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
+        if (_switchingProject || _exitRequested || _runner.IsRunning || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
             return;
         _startingReview = true;
         UpdateStartCommitButton();
@@ -1182,6 +1188,11 @@ public partial class MainWindow : Window
     private async Task ExitApplicationAsync()
     {
         if (_exitRequested) return;
+        if (!_switchingProject)
+        {
+            try { SaveProjectDraft(); }
+            catch (Exception exception) { AppendLog("Project settings were not saved: " + exception.Message); }
+        }
         _exitRequested = true;
         IsEnabled = false;
         _manualReviewCancellation?.Cancel();
