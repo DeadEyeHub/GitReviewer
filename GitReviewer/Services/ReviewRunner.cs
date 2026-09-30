@@ -16,6 +16,7 @@ public sealed class ReviewRunner
     private bool _manualReviewActive;
     private string _activeCommit = string.Empty;
     private int _remaining;
+    private int _retryDelaySeconds;
     public event Action<int?>? RemainingChanged;
     public event Action<DateTimeOffset?>? NextRunChanged;
     public event Action<(string Repository, string Sha, TokenUsage? Usage)>? UsageReceived;
@@ -62,6 +63,7 @@ public sealed class ReviewRunner
             profile.Parameters.Validate();
             _cancellation?.Dispose();
             _cancellation = new CancellationTokenSource();
+            _retryDelaySeconds = settings.PollIntervalSeconds;
             _runTask = RunLoopAsync(settings, profile.Clone(), _cancellation.Token);
             return true;
         }
@@ -369,6 +371,14 @@ public sealed class ReviewRunner
             Publish(Log, Localization.Format("Local branch {0} advanced: {1} → {2}.",
                 "Локальная ветка {0} продвинута: {1} → {2}.", branch, Short(advanceFrom), Short(sha)));
         }
+        if (result.Failure is not null)
+        {
+            SetRemaining(Math.Max(0, _remaining - 1));
+            Emit(ReviewStage.Failed, profile, sha, result.Failure);
+            Publish(Log, Localization.Format("Commit {0} skipped; failure saved in report. Continuing.",
+                "Коммит {0} пропущен; причина сохранена в отчёте. Продолжаем.", Short(sha)));
+            return;
+        }
         Complete(repositoryPath, branch, sha, profile, result, false, cancellationToken);
         Log?.Invoke(Localization.Format(
             "Commit {0} reviewed, findings: {1}.",
@@ -394,6 +404,52 @@ public sealed class ReviewRunner
 
         var commit = await _git.GetCommitInfoAsync(repositoryPath, sha, cancellationToken);
         Publish(CommitInfoChanged, commit);
+        ReviewResult result;
+        var attempt = 0;
+        while (true)
+        {
+            try
+            {
+                if (attempt > 0) Emit(ReviewStage.Started, profile, sha);
+                result = await AnalyzeAsync(repositoryPath, branch, sha, profile, repositoryIdentity, cancellationToken);
+                break;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (manualReview)
+                {
+                    var failed = new ReviewResult { Failure = GitService.SanitizeDiagnostic(exception.Message), AnalysisDuration = analysisClock.Elapsed };
+                    await _reportWriter.AppendAsync(repositoryPath, branch, commit, failed, true, cancellationToken, repositoryIdentity);
+                    throw;
+                }
+                Emit(ReviewStage.Failed, profile, sha, exception.Message);
+                if (attempt++ >= profile.Parameters.MaxRetries)
+                {
+                    result = new ReviewResult { Failure = GitService.SanitizeDiagnostic(exception.Message) };
+                    break;
+                }
+                Publish(Log, Localization.Format("Commit {0}: retry {1}/{2}.",
+                    "Коммит {0}: повтор {1}/{2}.", Short(sha), attempt, profile.Parameters.MaxRetries));
+                analysisClock.Stop();
+                Publish(NextRunChanged, (DateTimeOffset?)DateTimeOffset.Now.AddSeconds(_retryDelaySeconds));
+                try { await Task.Delay(TimeSpan.FromSeconds(_retryDelaySeconds), cancellationToken); }
+                finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
+                analysisClock.Start();
+            }
+        }
+        Emit(ReviewStage.Report, profile, sha);
+        analysisClock.Stop();
+        result.AnalysisDuration = analysisClock.Elapsed;
+        await _reportWriter.AppendAsync(
+            repositoryPath, branch, commit, result, manualReview, cancellationToken, repositoryIdentity);
+        return result;
+    }
+
+    private async Task<ReviewResult> AnalyzeAsync(string repositoryPath, string branch, string sha,
+        ModelProfile profile, string repositoryIdentity, CancellationToken cancellationToken)
+    {
         Emit(ReviewStage.PreparingDiff, profile, sha);
         profile.Parameters.Validate();
         using var tools = await GitToolSession.CreateAsync(repositoryPath, sha, cancellationToken, profile.Parameters.SnapshotMb);
@@ -409,11 +465,6 @@ public sealed class ReviewRunner
             result = ReviewParser.Parse(response);
         }
 
-        Emit(ReviewStage.Report, profile, sha);
-        analysisClock.Stop();
-        result.AnalysisDuration = analysisClock.Elapsed;
-        await _reportWriter.AppendAsync(
-            repositoryPath, branch, commit, result, manualReview, cancellationToken, repositoryIdentity);
         return result;
     }
 

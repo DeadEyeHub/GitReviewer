@@ -30,6 +30,7 @@ public sealed record GitRepositoryIdentity(
 
 public sealed class ReviewResult
 {
+    public string? Failure { get; set; }
     public TimeSpan? AnalysisDuration { get; set; }
     public string ReportMarkdown { get; set; } = "";
     public string RepositoryIdentity { get; set; } = "";

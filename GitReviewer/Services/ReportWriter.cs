@@ -42,9 +42,7 @@ public sealed class ReportWriter
             var sourcePath = !File.Exists(path) && File.Exists(legacyPath)
                 ? legacyPath
                 : path;
-            var marker = manualReview
-                ? $"<!-- manual-review:{commit.Sha}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()} -->"
-                : $"<!-- commit:{commit.Sha} -->";
+            var marker = $"<!-- commit:{commit.Sha} -->";
             var existing = string.Empty;
             if (File.Exists(sourcePath))
             {
@@ -106,10 +104,9 @@ public sealed class ReportWriter
             var temporaryPath = path + ".tmp";
             var start = existing.Length;
             var end = existing.Length;
-            if (!manualReview)
+            var entries = new List<(int Offset, bool Matches)>();
             {
-                // A cursor-save retry may produce a different model result. Replace its
-                // automatic entry, preserving adjacent entries and markers inside code fences.
+                // Match both current and legacy manual entries, outside fenced responses.
                 var offset = 0;
                 var inFence = false;
                 var lines = existing.Split('\n');
@@ -121,18 +118,22 @@ public sealed class ReportWriter
                     if (!inFence && index + 1 < lines.Length &&
                         lines[index + 1].StartsWith("## `", StringComparison.Ordinal))
                     {
-                        if (start == existing.Length && line == marker) start = offset;
-                        else if (start != existing.Length &&
-                                 (line.StartsWith("<!-- commit:", StringComparison.Ordinal) ||
-                                  line.StartsWith("<!-- manual-review:", StringComparison.Ordinal)))
-                        {
-                            end = offset;
-                            break;
-                        }
+                        if (line.StartsWith("<!-- commit:", StringComparison.Ordinal) ||
+                            line.StartsWith("<!-- manual-review:", StringComparison.Ordinal))
+                            entries.Add((offset, line == marker || line.StartsWith($"<!-- manual-review:{commit.Sha}:", StringComparison.Ordinal)));
                     }
                     offset += rawLine.Length + 1;
                 }
             }
+            // Remove every old entry for this SHA, keeping its first position.
+            for (var i = entries.Count - 1; i >= 0; i--)
+            {
+                if (!entries[i].Matches) continue;
+                start = entries[i].Offset;
+                end = i + 1 < entries.Count ? entries[i + 1].Offset : existing.Length;
+                existing = existing.Remove(start, end - start);
+            }
+            end = start;
             await File.WriteAllTextAsync(temporaryPath,
                 existing[..start] + text + existing[end..], Encoding.UTF8, cancellationToken);
             File.Move(temporaryPath, path, true);
@@ -144,6 +145,20 @@ public sealed class ReportWriter
         {
             _writeLock.Release();
         }
+    }
+
+    public async Task ClearAsync(string repositoryPath, string branch, string? repositoryIdentity = null)
+    {
+        await _writeLock.WaitAsync();
+        try
+        {
+            var path = GetReportPath(repositoryPath, branch, repositoryIdentity);
+            var legacy = GetReportPath(repositoryPath, branch);
+            // Preserve the previous contents for recovery; prevent legacy fallback reopening it.
+            foreach (var target in new[] { path, legacy }.Distinct(StringComparer.OrdinalIgnoreCase))
+                if (File.Exists(target)) File.Move(target, target + ".cleared-" + Guid.NewGuid().ToString("N") + ".bak");
+        }
+        finally { _writeLock.Release(); }
     }
 
     public void Open(string repositoryPath, string branch, string? repositoryIdentity = null)
@@ -160,6 +175,8 @@ public sealed class ReportWriter
 
     private static string DescribeResult(ReviewResult result)
     {
+        if (result.Failure is not null)
+            return Localization.Text("review failed; skipped: ", "проверка не выполнена; пропущен: ") + Escape(result.Failure);
         if (result.EmptyDiff)
             return Localization.Text("empty diff; no model request", "пустой diff; запрос к модели не выполнялся");
         if (result.Findings.Count > 0)

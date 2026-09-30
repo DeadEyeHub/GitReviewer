@@ -73,7 +73,8 @@ public sealed class MailNotifications : IAsyncDisposable
     {
         _settingsPath = Path.Combine(directory, "mail-settings.json");
         _queuePath = Path.Combine(directory, "mail-queue.json");
-        _log = log;
+        // A UI/logging failure must never terminate the delivery worker.
+        _log = message => { try { log(message); } catch { } };
         _send = send ?? SendSmtpAsync;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         try
@@ -111,12 +112,13 @@ public sealed class MailNotifications : IAsyncDisposable
     }
     public void Enqueue(CommitReviewed review)
     {
-        if (review.HasUnstructuredResponse) return;
+        if (review.HasUnstructuredResponse) { _log("Mail: incomplete review skipped: " + review.Sha); return; }
         lock (_gate)
         {
             if (LoadError is not null) { _log(LoadError); return; }
-            if (!_settings.Enabled) return;
-            if ((review.FindingCount == 0 || review.EmptyDiff) && !_settings.SendWithoutBugs) return;
+            if (!_settings.Enabled) { _log("Mail: notifications disabled; skipped: " + review.Sha); return; }
+            if ((review.FindingCount == 0 || review.EmptyDiff) && !_settings.SendWithoutBugs)
+            { _log("Mail: no findings; clean-review notifications disabled; skipped: " + review.Sha); return; }
             try
             {
                 _settings.Validate();
@@ -137,13 +139,13 @@ public sealed class MailNotifications : IAsyncDisposable
                 var identity = Path.GetFullPath(string.IsNullOrEmpty(review.RepositoryIdentity) ? review.RepositoryPath : review.RepositoryIdentity);
                 if (OperatingSystem.IsWindows()) identity = identity.ToUpperInvariant();
                 var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity + "\n" + review.BranchRef + "\n" + review.Sha)));
-                if (_jobs.Any(j => j.Key == key)) return;
+                if (_jobs.Any(j => j.Key == key)) { _log("Mail: this commit is already queued or sent: " + review.Sha); return; }
                 var job = new MailJob { Key = key, MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
                     Subject = Clean($"[GitReviewer] {Path.GetFileName(review.RepositoryPath)} / {review.BranchRef} / {review.Sha[..Math.Min(8, review.Sha.Length)]} — bugs: {review.FindingCount}"),
                     Report = review.ReportMarkdown, From = _settings.From, Recipients = string.Join(";", recipients.Select(r => r.ToString())), NextAttempt = _now() };
                 _jobs.Add(job);
                 try { Save(_queuePath, _jobs); } catch { _jobs.Remove(job); throw; }
-                _log(Localization.Text("Mail: report queued.", "Почта: отчёт поставлен в очередь."));
+                _log(Localization.Text("Mail: report queued: ", "Почта: отчёт поставлен в очередь: ") + job.Subject);
             }
             catch (Exception e) { _log("Mail: cannot queue report (" + e.GetType().Name + "). Review is saved."); }
         }
@@ -210,7 +212,7 @@ public sealed class MailNotifications : IAsyncDisposable
             {
                 await _send(settings, job, token);
                 lock (_gate) { job.Sent = true; job.Report = ""; Save(_queuePath, _jobs); }
-                _log(Localization.Text("Mail: report sent.", "Почта: отчёт отправлен."));
+                _log(Localization.Text("Mail: report accepted by SMTP server: ", "Почта: отчёт принят SMTP-сервером: ") + job.Subject);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (Exception e)

@@ -70,11 +70,11 @@ public partial class MainWindow : Window
         public string Help => Property.Name switch
         {
             nameof(ModelParameters.MaxRetries) => Localization.Text(
-                "Automatic retries after a failed review or preparation/fetch error. 3 means up to 4 attempts including the first; 0 stops after the first failure. Retries wait for the configured polling interval. Success or a different failing commit resets the count. When exhausted, monitoring stops but the app stays open; Start begins a fresh run. Manual review is not retried.",
-                "Автоповторы после ошибки ревью или подготовки/fetch. 3 означает до 4 попыток вместе с первой; 0 — остановка после первой ошибки. Между повторами выдерживается интервал автопроверки. Успех или другой ошибочный коммит сбрасывает счётчик. При исчерпании мониторинг останавливается, приложение остаётся открытым; «Старт» запускает заново. Ручная проверка не повторяется."),
+                "Retries per failed commit, separated by the polling interval. 3 means 4 attempts. Once exhausted, the failure is saved in the report and review continues with the next commit. Repository/fetch, report saving, cursor and branch safety failures still stop monitoring after retries. Manual reviews are not retried.",
+                "Повторы для каждого ошибочного коммита через интервал автопроверки. 3 означает 4 попытки. После исчерпания причина записывается в отчёт и проверяется следующий коммит. Ошибки репозитория/fetch, сохранения отчёта, позиции и безопасного продвижения ветки по-прежнему останавливают мониторинг после повторов. Ручная проверка не повторяется."),
             nameof(ModelParameters.ReviewMinutes) => Localization.Text(
-                "Total time allowed for the model agent to review one commit, including all requests and tool calls. On timeout, the review is incomplete and the branch does not advance.",
-                "Общее время работы агента над одним коммитом, включая все запросы и вызовы инструментов. При превышении проверка считается незавершённой, ветка не продвигается."),
+                "Time allowed for each model analysis attempt, including requests and tools. After exhausted retries, the commit is recorded as failed and skipped, not as bug-free.",
+                "Время каждой попытки анализа, включая запросы и инструменты. После исчерпания повторов коммит записывается как не проверенный и пропускается, а не считается проверенным без ошибок."),
             nameof(ModelParameters.Temperature) => Localization.Text(
                 "Controls randomness of generated responses. Lower values produce more predictable responses; higher values increase variation. Zero is the default for code review.",
                 "Управляет случайностью ответов. Низкие значения делают ответы более предсказуемыми, высокие увеличивают разнообразие. Для ревью по умолчанию используется 0."),
@@ -315,8 +315,8 @@ public partial class MainWindow : Window
             "Run git fetch before each check",
             "Выполнять git fetch перед каждой проверкой");
         PullExplanationTextBlock.Text = Localization.Text(
-            "With fetch enabled, a checked-out local branch advances one commit after each successful review (clean working copy required). Remote-tracking branches leave working files unchanged. No upstream: fetch is skipped.",
-            "При включённом fetch открытая локальная ветка продвигается на коммит после успешной проверки; нужна чистая рабочая копия. Для refs/remotes/... рабочие файлы не меняются. Без upstream fetch пропускается.");
+            "With fetch enabled, a checked-out local branch advances after a saved review or recorded skip (clean working copy required). Remote-tracking branches leave working files unchanged. No upstream: fetch is skipped.",
+            "При включённом fetch локальная ветка продвигается после сохранения проверки или записи о пропуске; нужна чистая рабочая копия. Для refs/remotes/... рабочие файлы не меняются. Без upstream fetch пропускается.");
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
         SelectedCommitLabel.Text = Localization.Text("Selected commit", "Выбранный коммит");
@@ -367,6 +367,7 @@ public partial class MainWindow : Window
         StartButton.Content = Localization.Text("Start", "Старт");
         StopButton.Content = Localization.Text("Stop", "Стоп");
         OpenReportButton.Content = Localization.Text("Open report", "Открыть отчет");
+        ClearReportButton.Content = Localization.Text("Clear report", "Очистить отчёт");
         HideToTrayButton.Content = Localization.Text("Hide to tray", "Скрыть в трей");
         ExitButton.Content = Localization.Text("Exit", "Выход");
 
@@ -1123,6 +1124,23 @@ public partial class MainWindow : Window
     }
 
     private async void OpenReport_Click(object sender, RoutedEventArgs e) => await OpenReportAsync();
+
+    private async void ClearReport_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var path = Path.GetFullPath(RepositoryPathTextBox.Text.Trim());
+            var branch = await _git.ResolveBranchAsync(path, _selectedBranch, CancellationToken.None);
+            var identity = await _git.GetRepositoryIdentityAsync(path, CancellationToken.None);
+            if (System.Windows.MessageBox.Show(Localization.Format(
+                "Clear the report for {0}, {1}? A backup will be kept. Review position and queued emails will not change.",
+                "Очистить отчёт для {0}, {1}? Будет сохранена резервная копия. Позиция проверки и очередь писем не изменятся.", path, branch),
+                "GitReviewer", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            await _reportWriter.ClearAsync(identity.WorkTreeRoot, branch, identity.CommonGitDirectory);
+            AppendLog(Localization.Text("Report cleared; backup saved beside the report.", "Отчёт очищен; резервная копия сохранена рядом с отчётом."));
+        }
+        catch (Exception exception) { ShowError(exception.Message); }
+    }
 
     private async Task OpenReportAsync()
     {

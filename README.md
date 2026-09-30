@@ -10,7 +10,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 
 - Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
 - Reviews the selected branch tip on first connection without scanning older commits, except in local-branch fetch mode, which starts with incoming commits after the local tip.
-- Fetches remote updates; a selected checked-out local branch advances by fast-forward after each successful commit review, only with a clean working copy.
+- Fetches remote updates; a selected checked-out local branch advances by fast-forward after a saved review or explicitly recorded skip, only with a clean working copy.
 - Fetch uses `--progress` and streams progress into the journal and status line,
   throttled to roughly one update per second per output stream. Large transfers
   have a one-hour timeout and can be canceled with Stop. Captured stdout/stderr
@@ -138,8 +138,8 @@ With **Run git fetch before each check** enabled, the selected remote-tracking
 ref is fetched from its configured remote/source ref. For a local selection,
 the current local tip is the baseline, and incoming commits are reviewed in
 first-parent order. After the report and cursor are saved, the local branch and
-working files advance to that commit using `merge --ff-only`. A failed review
-does not advance the branch. The local tip remains authoritative on restart,
+working files advance to that commit using `merge --ff-only`. Exhausted analysis
+failures are saved as explicit skips before advancement. The local tip remains authoritative on restart,
 including after an interrupted advancement. An explicit older start commit is
 reviewed through the local tip before advancing. Merge commits are reviewed
 against their first parent; side-branch commits are represented by the merge diff.
@@ -241,11 +241,11 @@ On the first connection, only the selected branch tip is reviewed against its fi
 parent. The model can access only the reviewed SHA and its immediate first parent,
 not older history. Local-branch fetch mode instead starts with incoming commits
 after the current local tip, as described under Branch Selection. After review, the last
-successfully reviewed SHA is stored in `state.json`, and only newer commits are
+reviewed or explicitly skipped SHA is stored in `state.json`, and only newer commits are
 processed.
 
 Manual review accepts a short or full hexadecimal commit SHA. It writes a
-separate report entry and does not change the automatic monitoring position in
+report entry (updating it when the SHA already exists) and does not change the automatic monitoring position in
 `state.json`. Stop automatic monitoring before starting a manual review.
 
 To choose where automatic monitoring begins, enter a short or full SHA in
@@ -253,7 +253,7 @@ To choose where automatic monitoring begins, enter a short or full SHA in
 commit** on the Project tab. This immediately starts automatic review, including
 the selected commit and then subsequent commits. The SHA must be an ancestor of the selected branch tip. It is
 stored as a pending start, so the selected commit is reviewed first. The normal
-branch cursor replaces it only after that review succeeds.
+branch cursor replaces it only after the review or exhausted-failure entry is saved.
 
 Normal access validation and stop/error behavior apply. Automatic monitoring
 continues afterward. The Dashboard has Start, Stop, Hide to tray and Exit in its
@@ -291,7 +291,8 @@ invalid fields, missing markers and extra prose; the model must preserve its
 findings and return the required plain-text blocks. Each rejected answer is saved
 verbatim in a JSON diagnostic under `diagnostics/` in the application data folder,
 with the reviewed SHA, model, attempt number and validation errors. If correction
-fails, the error includes the diagnostic path and the review cursor is not advanced.
+fails, the error includes the diagnostic path. Automatic analysis retries apply;
+once exhausted, the failure is recorded before skipping the commit.
 Truncated responses and unfinished tool reads cannot be accepted through this retry.
 
 Line ranges use 1-based inclusive bounds, at most 500 lines per range, and require
@@ -403,8 +404,9 @@ a Git retrieval failure (including an unavailable blob, but not a confirmed abse
 fatal: reading an unrelated resource cannot clear a missing-context failure.
 Malformed response
 envelopes, unrecovered argument errors, model-output/budget exhaustion, unfinished diff pages,
-non-`stop` final responses, or incomplete report blocks fail the review. No report,
-cursor advancement, or completion notification is produced for those failures.
+non-`stop` final responses, or incomplete report blocks fail the analysis attempt.
+After automatic retries, a failure entry is persisted and the commit is skipped,
+without a success notification or email.
 Large commits may therefore require a different workflow instead of being
 silently reviewed only in part. The model-output budget is separate from snapshot
 storage: increasing disk capacity does not increase model context or the 512,000
@@ -442,11 +444,15 @@ text, timeout messages and the Dashboard timer reflect the configured values.
 Internal safety limits (Git subprocess timeout, page sizes, allowed commits and
 path restrictions) are not model-generation settings and remain unchanged.
 
-After the automatic retry budget is exhausted, monitoring stops and Start becomes
-available again; the application stays open. Zero retries stops after the first
-failure. Retries use the normal polling interval and include preparation/fetch
-errors. A successful cycle or a different failing commit resets the counter.
-Starting monitoring again resets it too. Manual reviews are never auto-retried.
+After analysis retries for a commit are exhausted, its failure reason is saved in
+the report and automatic review continues with the next commit. Zero retries skips
+after the first failed analysis. Retries use the normal polling interval. A skipped
+commit advances the cursor and, when applicable, the clean local branch, but is
+never reported as bug-free and does not send a success email or tray notification.
+Repository/fetch, metadata, persistence and unsafe branch-advancement errors still
+stop monitoring after their retry budget: losing data or skipping an unknown Git
+state is not safe. Cancellation never skips a commit. Manual failures are recorded
+and shown to the user without automatic retries.
 
 Empty changes are detected locally and reported honestly as not sent to the model.
 Successful agent reviews retain the existing `BUG` / `NO_BUGS` report format.
@@ -482,17 +488,22 @@ the main window also hides Log, and exiting the app closes it.
 
 After the report is written (and the automatic cursor saved), the app requests
 one tray balloon per completed commit, including `NO_BUGS`. Historical unstructured
-reports remain readable, but new incomplete/unstructured agent replies fail rather
-than advancing the cursor. Empty diffs are marked as
+reports remain readable; new incomplete/unstructured agent replies are retried and,
+if exhausted, recorded as failed before advancing the cursor. Empty diffs are marked as
 not sent to the model, rather than claiming no bugs. Failed or canceled reviews
 do not generate completion notifications. Notification failures do not affect
 review state. Windows notification settings may suppress or coalesce balloons.
 
 If cursor saving fails or is canceled after report writing, the next automatic
 attempt may receive a different model result. It atomically replaces that commit's
-automatic report entry before saving the cursor and publishing completion, so
+report entry before saving the cursor and publishing completion, so
 the notification matches the persisted outcome without duplicate entries.
-Other commits and manual review entries are preserved.
+Automatic and manual reviews of the same SHA update one entry with the latest
+outcome; legacy duplicate entries for that SHA are consolidated. Other commits are
+preserved. **Clear report** on the Dashboard clears only the selected repository and
+branch, with confirmation and a `.cleared-*.bak` backup alongside the report.
+It does not reset the review cursor or modify queued emails. Running reviews may
+write new entries after clearing.
 
 The model returns plain text blocks:
 
@@ -637,6 +648,10 @@ delivery: loss of the server's final confirmation or a crash before saving deliv
 state can still produce a duplicate. Queue/settings write failures are logged;
 corrupt files are preserved rather than silently overwritten. SMTP protocol traces
 and passwords are not written to logs.
+The journal records why a notification is skipped (disabled, no findings, incomplete,
+or already queued/sent), and identifies queued/accepted messages by commit. A journal
+callback failure cannot terminate the mail worker. SMTP acceptance does not guarantee
+inbox delivery; repeated reviews of an already mailed SHA are still deduplicated.
 
 Run isolated queue/credential tests using
 `dotnet run --project GitReviewer.Tests/Mail/Mail.csproj`. They do not send mail.

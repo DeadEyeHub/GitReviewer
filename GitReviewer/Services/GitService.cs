@@ -210,7 +210,7 @@ public sealed class GitService
                     ? Localization.Format("Fetch completed: {0} unchanged at {1}.", "Fetch выполнен: {0} без изменений, {1}.", branch, after[..8])
                     : Localization.Format("Fetch completed: {0}, {1} → {2}.", "Fetch выполнен: {0}, {1} → {2}.", branch, before[..8], after[..8]));
                 if (branch.StartsWith("refs/heads/", StringComparison.Ordinal))
-                    activity?.Invoke(Localization.Format("Fetched target {0}; local branch will advance after each successful review.", "Получена вершина {0}; локальная ветка будет продвигаться после каждой успешной проверки.", fetchedHead[..8]));
+                    activity?.Invoke(Localization.Format("Fetched target {0}; local branch will advance after each saved review or recorded skip.", "Получена вершина {0}; локальная ветка будет продвигаться после сохранения проверки или записи о пропуске.", fetchedHead[..8]));
             }
             return result;
         }

@@ -34,6 +34,7 @@
                             <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
                                 <Button x:Name="OpenLogButton" Padding="18,7" Margin="0,0,0,8" Content="Log" Click="OpenLog_Click" />
                                 <Button x:Name="OpenReportButton" Padding="18,7" Content="Open report" Click="OpenReport_Click" />
+                                <Button x:Name="ClearReportButton" Padding="18,7" Margin="0,8,0,0" Content="Clear report" Click="ClearReport_Click" />
                             </StackPanel>
                             </Grid>
                         </Border>
