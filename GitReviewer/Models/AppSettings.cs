@@ -10,6 +10,7 @@ public sealed class ProjectCatalog
 public sealed class AppSettings
 {
     public string ProjectId { get; set; } = "";
+    public string DisplayName { get; set; } = "";
     public string RepositoryPath { get; set; } = string.Empty;
     public string BranchRef { get; set; } = string.Empty;
     public int PollIntervalSeconds { get; set; } = 60;

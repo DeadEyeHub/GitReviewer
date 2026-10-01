@@ -33,6 +33,9 @@ public sealed class ConfigurationStore
         ValidateProjects(catalog);
         foreach (var project in catalog.Projects)
         {
+            project.DisplayName = (project.DisplayName ?? "").Trim();
+            if (project.DisplayName.Length > 80 || project.DisplayName.Any(char.IsControl))
+                throw new InvalidDataException("Project name must be at most 80 characters without control characters.");
             if (string.IsNullOrEmpty(project.ProjectId)) project.ProjectId = Guid.NewGuid().ToString("N");
             if (!Guid.TryParseExact(project.ProjectId, "N", out _))
                 throw new InvalidDataException("Invalid project ID.");
@@ -119,6 +122,7 @@ public sealed class ConfigurationStore
         {
             var catalog = LoadProjects();
             settings.ProjectId = catalog.Projects[catalog.ActiveIndex].ProjectId;
+            settings.DisplayName = catalog.Projects[catalog.ActiveIndex].DisplayName;
             catalog.Projects[catalog.ActiveIndex] = settings;
             // Interface language is application-wide, unlike Git/repository settings.
             foreach (var project in catalog.Projects) project.Language = settings.Language;

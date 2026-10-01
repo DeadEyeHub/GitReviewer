@@ -5,9 +5,9 @@
         MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="16">
-        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
 
-        <TabControl x:Name="MainTabs">
+        <TabControl x:Name="MainTabs" Grid.Row="1">
             <TabItem x:Name="DashboardTab" Header="Dashboard">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="20">
@@ -286,11 +286,12 @@
                 </Grid>
             </TabItem>
         </TabControl>
-        <Border Grid.Row="1" BorderBrush="#D0D0D0" BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,8,0,0">
+        <Border Grid.Row="0" BorderBrush="#D0D0D0" BorderThickness="0,0,0,1" Padding="0,0,0,8" Margin="0,0,0,8">
             <DockPanel>
                 <TextBlock x:Name="ProjectsLabel" Text="Projects:" VerticalAlignment="Center" Margin="0,0,10,0" />
                 <Button x:Name="AddProjectButton" DockPanel.Dock="Right" Content="+" Width="36" Margin="8,0,0,0" Click="AddProject_Click" />
                 <Button x:Name="RemoveProjectButton" DockPanel.Dock="Right" Content="−" Width="36" Margin="8,0,0,0" Click="RemoveProject_Click" />
+                <Button x:Name="RenameProjectButton" DockPanel.Dock="Right" Content="Rename…" Padding="10,4" Margin="8,0,0,0" Click="RenameProject_Click" />
                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="ProjectButtons" Orientation="Horizontal" />
                 </ScrollViewer>

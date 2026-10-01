@@ -15,6 +15,7 @@ public partial class MainWindow
         public required PersistentLog Journal { get; init; }
         public required PersistentLog DetailsLog { get; init; }
         public string Label = "";
+        public string DisplayName = "";
         public string Identity = "";
         public string WorkTree = "";
         public string Branch = "";
@@ -46,6 +47,7 @@ public partial class MainWindow
         var logDirectory = Path.Combine(AppPaths.DataDirectory, "logs", projectId.ToString("N"));
         var runtime = new ProjectRuntime {
             Git = git,
+            DisplayName = settings.DisplayName,
             Journal = new PersistentLog(Path.Combine(logDirectory, "journal.log")),
             DetailsLog = new PersistentLog(Path.Combine(logDirectory, "model.log"),
                 maxBytes: 32 * 1024 * 1024, maxTailLines: 10_000, maxTailCharacters: 4_000_000),
@@ -110,7 +112,7 @@ public partial class MainWindow
         CommitDetailsText.Text = _activeRuntime.Details;
         for (var i = 0; i < _projectRuntimes.Count && i < ProjectButtons.Children.Count; i++)
             if (ProjectButtons.Children[i] is System.Windows.Controls.Button button)
-                button.Content = (i + 1).ToString() + (_projectRuntimes[i].Runner.IsRunning ? " ▶" : "");
+                button.Content = ProjectCaption(i) + (_projectRuntimes[i].Runner.IsRunning ? " ▶" : "");
         if (_trayIcon is not null)
             _trayIcon.Text = TruncateTrayText(Localization.Format("Git Reviewer - running projects: {0}",
                 "Git Reviewer - работают проектов: {0}", _projectRuntimes.Count(p => p.Runner.IsRunning)));

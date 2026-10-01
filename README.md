@@ -763,10 +763,15 @@ repositories and change their working files; check local changes and URLs first.
 
 ## Multiple projects
 
-The bottom navigation is shared by all tabs: numbered buttons select saved projects,
+The top navigation is shared by all tabs: numbered buttons select saved projects,
 **+** adds a project and **−** removes it from the list after confirmation. Hover a
 number to see its repository and branch. Removing an entry never deletes repository
 files, reports, queued mail or review progress.
+
+Select a project and click **Rename…** to replace its number with a custom name
+(up to 80 characters). Clear the name to return to numbering. Names persist across
+restarts and can be changed while a project runs; renaming does not change its
+stable ID, logs, reports or review position.
 
 Each project stores its repository, branch, polling interval, fetch flag and Git
 authentication settings. Changes are saved when switching or exiting. The selected

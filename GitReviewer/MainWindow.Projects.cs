@@ -10,10 +10,57 @@ public partial class MainWindow
 {
     private bool _switchingProject;
 
+    private string ProjectCaption(int index) => string.IsNullOrWhiteSpace(_projectRuntimes[index].DisplayName)
+        ? (index + 1).ToString(CultureInfo.InvariantCulture) : _projectRuntimes[index].DisplayName;
+
+    private void RenameProject(string name)
+    {
+        var catalog = _configuration.LoadProjects();
+        catalog.Projects[catalog.ActiveIndex].DisplayName = name;
+        _configuration.SaveProjects(catalog);
+        _activeRuntime.DisplayName = catalog.Projects[catalog.ActiveIndex].DisplayName;
+        RenderProjectButtons();
+    }
+
+    private void RenameProject_Click(object sender, RoutedEventArgs e)
+    {
+        if (_switchingProject || _exitRequested) return;
+        var dialog = new Window {
+            Owner = this, Title = Localization.Text("Project name", "Название проекта"),
+            Width = 430, SizeToContent = SizeToContent.Height, ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner, ShowInTaskbar = false
+        };
+        var panel = new Controls.StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new Controls.TextBlock {
+            Text = Localization.Text("Leave empty to display the project number. Maximum 80 characters.",
+                "Оставьте пустым, чтобы показывать номер. Максимум 80 символов."),
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10)
+        });
+        var input = new Controls.TextBox { Text = _activeRuntime.DisplayName, MaxLength = 80 };
+        panel.Children.Add(input);
+        var buttons = new Controls.StackPanel { Orientation = Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var save = new Controls.Button { Content = Localization.Text("Save", "Сохранить"), IsDefault = true, Padding = new Thickness(12, 5, 12, 5) };
+        var cancel = new Controls.Button { Content = Localization.Text("Cancel", "Отмена"), IsCancel = true,
+            Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(8, 0, 0, 0) };
+        save.Click += (_, _) => {
+            try { RenameProject(input.Text); dialog.DialogResult = true; }
+            catch (Exception exception) { ShowError(exception.Message); }
+        };
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+        panel.Children.Add(buttons);
+        dialog.Content = panel;
+        dialog.Loaded += (_, _) => { input.Focus(); input.SelectAll(); };
+        dialog.ShowDialog();
+    }
+
     private void RenderProjectButtons()
     {
         var catalog = _configuration.LoadProjects();
         ProjectsLabel.Text = Localization.Text("Projects:", "Проекты:");
+        RenameProjectButton.Content = Localization.Text("Rename…", "Переименовать…");
+        RenameProjectButton.IsEnabled = !_switchingProject;
         AddProjectButton.ToolTip = Localization.Text("Add project", "Добавить проект");
         RemoveProjectButton.ToolTip = Localization.Text("Remove project from list; keep files and reports", "Убрать проект из списка; сохранить файлы и отчёты");
         RemoveProjectButton.IsEnabled = !_switchingProject && catalog.Projects.Count > 1;
@@ -25,12 +72,12 @@ public partial class MainWindow
             var description = string.IsNullOrWhiteSpace(project.RepositoryPath)
                 ? Localization.Text("New project", "Новый проект") : project.RepositoryPath + "\n" + project.BranchRef;
             var button = new Controls.Button {
-                Content = (index + 1).ToString(CultureInfo.InvariantCulture), ToolTip = description,
+                Content = ProjectCaption(index), ToolTip = description,
                 MinWidth = 36, Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(0, 0, 6, 0),
                 FontWeight = index == catalog.ActiveIndex ? FontWeights.Bold : FontWeights.Normal,
                 IsEnabled = !_switchingProject && index != catalog.ActiveIndex
             };
-            System.Windows.Automation.AutomationProperties.SetName(button, $"{index + 1}: {description}");
+            System.Windows.Automation.AutomationProperties.SetName(button, $"{ProjectCaption(index)}: {description}");
             button.Click += async (_, _) => await ChangeProjectAsync(number);
             ProjectButtons.Children.Add(button);
         }
