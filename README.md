@@ -2,13 +2,38 @@
 
 <img src="GitReviewer/Assets/app-icon.png" alt="Git Reviewer logo" width="160" />
 
-Version **3.1.0** uses native model-driven Git tools and requires a
-tool-capable model/provider. There is no legacy diff-prompt fallback.
-
 Git Reviewer is a Windows desktop application that uses a local or cloud
-OpenAI-compatible model to inspect Git commits for correctness bugs.
+OpenAI-compatible model to review Git commits for correctness bugs. It supports
+parallel projects, Markdown reports and optional email notifications.
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Build And Run](#build-and-run)
+- [Multiple projects](#multiple-projects)
+- [Branch Selection](#branch-selection)
+  - [Linked Worktrees](#linked-worktrees)
+- [Repository Authentication](#repository-authentication)
+- [Submodules](#submodules)
+- [Review Behavior](#review-behavior)
+  - [Native Git Agent](#native-git-agent)
+  - [Model parameters](#model-parameters)
+- [Model Profiles](#model-profiles)
+  - [vLLM And Model Discovery](#vllm-and-model-discovery)
+- [Model working hours](#model-working-hours)
+- [Dashboard](#dashboard)
+- [Reports And Notifications](#reports-and-notifications)
+- [SMTP notifications](#smtp-notifications)
+- [Journal And Log](#journal-and-log)
+- [Crash diagnostics](#crash-diagnostics)
+- [User Data](#user-data)
+- [Focused Checks](#focused-checks)
+- [Language](#language)
 
 ## Features
+
+Review requires a tool-capable model/provider; there is no legacy diff-prompt fallback.
 
 - Keeps separate repository and branch cursors in `state.json`; selecting a valid new repository registers it without reusing another repository's cursor.
 - Reviews the selected branch tip on first connection without scanning older commits, except in local-branch fetch mode, which starts with incoming commits after the local tip.
@@ -36,53 +61,7 @@ OpenAI-compatible model to inspect Git commits for correctness bugs.
 - Records each model-driven Git command with its arguments, exit codes, captured output, and errors in the detailed log.
 - Requests a tray notification for each completed manual or automatic commit review, including no findings.
 
-## Crash diagnostics
-
-Unhandled WPF dispatcher, AppDomain, Windows Forms thread and unobserved task
-exceptions are recorded in separate `crashes/crash-*.log` files under the application
-data directory (by default `%LOCALAPPDATA%/GitReviewer`). Reports include time,
-application/runtime version, exception type/message, stack and inner exceptions,
-plus the last review context. UI fatal errors show the report path and are not
-silently ignored; the process terminates rather than continuing uncertain review state.
-Unobserved task exceptions are logged when the runtime raises that event.
-If the main directory is unwritable, reports fall back to `%TEMP%/GitReviewer-crashes`.
-Reports may contain local paths and exception data; inspect them before sharing.
-Forced process termination, power loss and severe runtime failures (for example
-stack overflow or insufficient memory to write a report) cannot be guaranteed to log.
-
-The first tab is the **Dashboard**; status is no longer repeated at the bottom.
-It displays repository/branch, full current SHA, subject, author/date, the remaining
-queue including the current commit, four recent journal entries, elapsed processing
-time for the current attempt, and a countdown to the next automatic cycle. The queue
-is based on the locally discovered tip (after fetch), not a prediction of future
-remote commits. Unknown/loading queue size is shown as a dash. Elapsed time freezes
-on completion, failure or cancellation and restarts for the next attempt. The next-run
-countdown appears during the poll delay, including the delay after a failed cycle;
-during processing it says "After this cycle", and when stopped it shows a dash.
-
-The Dashboard shows separate provider-reported Input and Output token counters
-for the commit, today and all time. Both counters persist across restarts. Historical
-total-only records are retained but cannot be retroactively split: unavailable
-breakdowns show "Unavailable", and partially known counters show "+ ?". Missing
-input/output fields from the provider are not treated as known zeroes.
-
-The Dashboard also tracks provider-reported token totals for this repository/commit
-(including retries), the current local calendar day, and all reviews since tracking
-was enabled. Input and output tokens are counted from API `usage`, never estimated
-from character counts; repeated input/context is included as reported by the provider.
-Streaming requests set `stream_options.include_usage=true`. A provider that rejects
-that standard option must be configured/upgraded to support it; no silent retry is sent.
-Latest cumulative usage per response is recorded once, including known usage from
-failed/incomplete responses. Requests without usage are counted and explicitly marked
-as unknown/incomplete totals, not zero-cost requests. Counts update after each response
-when usage is available, not per generated token. No historical usage is invented.
-`token-usage.json` in the application data directory persists daily, per-commit and
-all-time totals using an atomic replacement. Corrupt history is preserved and reported,
-not overwritten with zero counters. Totals cover review requests, not connection tests.
-
-**Clear journal** on the Journal tab confirms and clears `journal.log`, its rotated
-copy and the Dashboard's recent entries. New activity may immediately create new
-entries. Reports, token statistics and the separate detailed model log are untouched.
+[Back to contents](#contents)
 
 ## Requirements
 
@@ -91,23 +70,27 @@ entries. Reports, token statistics and the separate detailed model log are untou
 - Git installed and available in `PATH`
 - A local model server or an API key for a cloud model
 
+[Back to contents](#contents)
+
 ## Build And Run
 
+Run from the repository root:
+
 ```powershell
-dotnet build
-dotnet run
+dotnet build GitReviewer/GitReviewer.csproj
+dotnet run --project GitReviewer/GitReviewer.csproj
 ```
 
 To create one versioned, self-contained Windows x64 executable, run:
 
 ```powershell
-.\publish-win-x64.ps1
+.\GitReviewer\publish-win-x64.ps1
 ```
 
 The result is written to:
 
 ```text
-dist\GitReviewer-3.1.0-win-x64.exe
+GitReviewer\dist\GitReviewer-<version>-win-x64.exe
 ```
 
 The executable includes the .NET runtime and default configuration templates.
@@ -122,6 +105,56 @@ running in the background. Use **Exit** (**Выход**) in the main window or t
 menu to cancel and await manual review, stop background monitoring, close Log,
 remove the tray icon, and shut down the application.
 
+The executable name and application version come from `<Version>` in
+[GitReviewer.csproj](GitReviewer/GitReviewer.csproj).
+
+[Back to contents](#contents)
+
+## Multiple projects
+
+The top navigation is shared by all tabs: numbered buttons select saved projects,
+**+** adds a project and **−** removes it from the list after confirmation. Hover a
+number to see its repository and branch. Removing an entry never deletes repository
+files, reports, queued mail or review progress.
+
+Select a project and click **Rename…** to replace its number with a custom name
+(up to 80 characters). Clear the name to return to numbering. Names persist across
+restarts and can be changed while a project runs; renaming does not change its
+stable ID, logs, reports or review position.
+
+Each project stores its repository, branch, polling interval, fetch flag and Git
+authentication settings. Changes are saved when switching or exiting. The selected
+project survives restart. On first launch, `settings.conf` is imported as project 1
+into an atomically saved `projects.json`; the legacy file is left unchanged.
+Corrupt or unsupported project catalogs are not silently overwritten.
+
+Projects can run automatic reviews concurrently: start one, switch by its number,
+and start another. Switching does not stop background projects. Start/Stop apply
+only to the selected project; running entries show ▶. Each project retains its
+own status, commit, timers, schedule, queue count and cancellation. Removing a
+running project stops only that worker; Exit awaits all workers. A manual review
+must finish before switching (other automatic workers continue).
+The new selection does not start automatically. The same working copy, or the
+same branch of a shared Git store, cannot be run twice concurrently; use distinct
+worktrees and branches. Git fetches sharing a Git store remain serialized.
+Journal and detailed-log review entries include repository/branch context.
+Each saved project has a stable ID and its own `logs/<project-id>/journal.log`
+and `model.log` under the application data directory (with independent rotation
+and clearing). The dashboard, Journal and open Log window follow the selected
+project, including background reviews. Removing a project keeps its log files.
+Old shared logs are retained, not reassigned to an arbitrary project; shared SMTP
+service messages continue in the application-wide `journal.log`.
+Parallel reviews consume provider quota concurrently; rate limits still apply.
+Review positions and reports remain
+keyed by repository Git identity and branch, so two entries for the same repository
+and branch share progress. Model profiles, SMTP settings, prompts, language and daily/all-time token totals
+are application-wide; review journals and detailed logs are per project.
+
+Run migration checks with `dotnet run --project GitReviewer.Tests/PromptMigration/PromptMigration.csproj`
+and isolated UI switching/layout checks with `dotnet run --project GitReviewer.Tests/ProjectsUi/ProjectsUi.csproj`.
+
+[Back to contents](#contents)
+
 ## Branch Selection
 
 Choose an existing folder, then select a full ref in **Selected branch**. Use
@@ -130,7 +163,8 @@ reload the list; stale asynchronous results cannot replace newer selections.
 `refs/heads/main` and `refs/remotes/origin/main` are different selections, and Git
 ref names are case-sensitive. Symbolic remote HEAD aliases are excluded.
 
-The selection is saved as `branch_ref` in `settings.conf`. Older configurations
+The selection is saved per project in `projects.json` (legacy `branch_ref` in
+`settings.conf`). Older configurations
 without this setting default to the current local branch. A missing selected
 branch is an error, never a silent switch to HEAD. A detached checkout requires
 an explicit branch selection. Manual SHA review can still inspect any existing
@@ -184,6 +218,8 @@ of silently choosing one.
 The application does not clone repositories. Select an existing local Git
 working directory, with or without a configured remote.
 
+[Back to contents](#contents)
+
 ## Repository Authentication
 
 The **Project** tab provides four authentication modes:
@@ -236,6 +272,55 @@ exist in the user's `known_hosts` file; PuTTY uses its own host-key cache.
 Verify and accept the server fingerprint using the corresponding client before
 running unattended checks. The application never stores an SSH
 passphrase or an HTTPS token itself.
+
+[Back to contents](#contents)
+
+## Submodules
+
+Review understands Git `160000` gitlink entries, including additions, deletions,
+pointer updates across several commits, and nested changes (up to 8 levels).
+The main `git_diff` response lists changed submodules with their exact old/new SHAs.
+The agent must read every listed module's complete diff using the `submodule`
+argument, including nested entries. A parent-only diff cannot produce a successful
+final review. Findings inside modules use full paths such as `lib/src/file.cs`.
+
+All six Git tools accept `submodule`; file/tree/search paths are then relative to
+that module. Only the two pinned gitlink commits are allowed, not their arbitrary
+ancestors. A pointer update is compared across its entire old-to-new range; adding
+or deleting a module compares against the empty tree. Working-copy contents are
+never used as review evidence. Child snapshots share the main session's disk budget.
+
+Modules must be initialized locally at their repository paths. Missing directories,
+missing pinned objects, symlink/junction module paths or excessive nesting produce
+an incomplete review, not a clean result. Renamed/deleted modules must still have
+their local repositories available at the historical paths to inspect removed code.
+Only changed modules are exposed to the model in this version.
+
+**Fetch initialized submodules on demand** is a per-project opt-in, disabled by
+default. With the main fetch checkbox enabled it uses Git's recursive on-demand
+fetch for initialized modules; the existing Git transfer log and timeout apply.
+It can contact different configured remotes using the selected credentials: enable
+it only for trusted repositories. It never automatically initializes/clones a new
+module. With fetch disabled, review is local-only. Missing historical objects may
+still require fetching the affected module manually.
+
+**Update submodules after branch advancement** is saved per project and enabled
+by default (including older configurations). This refers to the existing fast-forward
+workflow, not rebase. When disabled, advancement does not run submodule checkout:
+their working copies keep their current SHAs. The clean-working-copy guard remains
+active, so a subsequent advancement may require manually aligning the modules.
+
+When enabled, after a clean local branch advances, initialized modules are checked out to their
+pinned commits recursively, with `--no-fetch --checkout`, no force and hooks/network
+disabled. Dirty modules still block advancement; changes are never stashed or
+discarded. If module checkout fails after the parent fast-forward, the error is
+shown and monitoring must resolve the working-copy state before continuing.
+
+For a trusted repository, initialize modules yourself with
+`git submodule update --init --recursive` before review. This command may download
+repositories and change their working files; check local changes and URLs first.
+
+[Back to contents](#contents)
 
 ## Review Behavior
 
@@ -346,7 +431,8 @@ Git runs through `ProcessStartInfo.ArgumentList`, never a shell. Tools cannot
 write, fetch, push, checkout, reset, run hooks, external diff, textconv, or network
 protocols. Lazy fetching and replacement objects are disabled. File content comes
 from `cat-file blob`, not the working directory; a symlink returns its stored link
-text, never the target. Submodules are not traversed. Installed Git and local
+text, never the target. Submodules are not traversed implicitly; changed pinned modules are accessed
+through the explicit `submodule` argument described in [Submodules](#submodules). Installed Git and local
 repository administration remain trusted; this is not an OS sandbox against a
 concurrent local attacker replacing repository metadata or the Git executable.
 
@@ -465,64 +551,7 @@ with tool-capable Mistral/vLLM chat templates. Git content and branch context ar
 not commands or instructions. This reduces prompt-injection risk but cannot
 guarantee that a model's findings are accurate.
 
-## Journal And Log
-
-The former Log tab is now **Journal** (**Журнал**) and retains general messages.
-Journal is appended to `%LOCALAPPDATA%\GitReviewer\journal.log`; the last 500
-lines are loaded into the tab after a complete application restart. The file
-rotates at 8 MiB and one previous generation is retained as `journal.log.1`.
-
-The main window's **Log** (**Лог**) button opens a separate detailed model window.
-It records the complete JSON request body, raw HTTP response stream, assistant
-content, server-returned `reasoning` / `reasoning_content`, tool-call arguments,
-tool results, and lifecycle stages. Streaming responses appear while generation
-is in progress. Hidden chain-of-thought cannot be recovered when a server or model
-does not return those fields. Authorization headers, API keys, and environment
-variable values are never logged.
-
-Detailed data is appended to `%LOCALAPPDATA%\GitReviewer\model-log.log`; it rotates
-at 32 MiB and keeps one previous generation as `model-log.log.1`. The Log window
-shows a bounded recent tail to keep WPF responsive, while the files hold the full
-retained exchange. These files contain prompts, repository paths, diffs, committed
-file contents, and model responses and must therefore be treated as sensitive.
-Closing Log does not interrupt review; reopening restores its recent tail. Hiding
-the main window also hides Log, and exiting the app closes it.
-
-After the report is written (and the automatic cursor saved), the app requests
-one tray balloon per completed commit, including `NO_BUGS`. Historical unstructured
-reports remain readable; new incomplete/unstructured agent replies are retried and,
-if exhausted, recorded as failed before advancing the cursor. Empty diffs are marked as
-not sent to the model, rather than claiming no bugs. Failed or canceled reviews
-do not generate completion notifications. Notification failures do not affect
-review state. Windows notification settings may suppress or coalesce balloons.
-
-If cursor saving fails or is canceled after report writing, the next automatic
-attempt may receive a different model result. It atomically replaces that commit's
-report entry before saving the cursor and publishing completion, so
-the notification matches the persisted outcome without duplicate entries.
-Automatic and manual reviews of the same SHA update one entry with the latest
-outcome; legacy duplicate entries for that SHA are consolidated. Other commits are
-preserved. **Clear report** on the Dashboard clears only the selected repository and
-branch, with confirmation and a `.cleared-*.bak` backup alongside the report.
-It does not reset the review cursor or modify queued emails. Running reviews may
-write new entries after clearing.
-
-The model returns plain text blocks:
-
-```text
-BUG
-FILE: calculator.py
-LINE: 12
-SIDE: OLD
-DESCRIPTION: The division-by-zero validation was removed.
-END
-```
-
-If no bugs are found, the expected response is:
-
-```text
-NO_BUGS
-```
+[Back to contents](#contents)
 
 ## Model Profiles
 
@@ -580,38 +609,105 @@ agent paging or output limits. Missing metadata does not prevent model selection
 Editing connection details or switching profiles clears discovered metadata;
 responses from requests started before form edits or newer operations are ignored.
 
-### Focused Checks
+[Back to contents](#contents)
 
-The separate `GitReviewer.Tests` repository links production services and
-uses a fake HTTP handler, isolated data paths, and temporary Git repositories.
-Its extended Git transport fixture runs on Linux using a local SSH shim; no
-server or credentials are required:
+## Model working hours
 
-```sh
-dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
-dotnet run --project ../GitReviewer.Tests/PromptMigration/PromptMigration.csproj
+On **Project**, enable **Do not run model (local time)** and enter a daily blocked
+interval in `HH:mm`, e.g. `09:00`–`18:00`. It is stored per project; disabled by
+default. Overnight intervals such as `22:00`–`06:00` are supported. Start is inclusive,
+end exclusive; equal/invalid times are rejected. Changes apply on the next Start.
+
+Automatic review waits before starting a cycle/commit, and checks again before every
+model request. An in-flight request may finish; a further request is prevented.
+An interrupted review restarts the same commit with a fresh session after the pause;
+no failed report, skipped cursor, email or retry-budget charge is produced by the
+schedule. Tokens already used remain counted. Dashboard status/next-run time show
+the pause. Stop/Exit cancels the wait. Manual reviews and model connection tests
+also respect the interval, but need manual restart if blocked. SMTP delivery is
+independent of the model schedule.
+
+[Back to contents](#contents)
+
+## Dashboard
+
+The first tab is the **Dashboard**; status is no longer repeated at the bottom.
+It displays repository/branch, full current SHA, subject, author/date, the remaining
+queue including the current commit, four recent journal entries, elapsed processing
+time for the current attempt, and a countdown to the next automatic cycle. The queue
+is based on the locally discovered tip (after fetch), not a prediction of future
+remote commits. Unknown/loading queue size is shown as a dash. Elapsed time freezes
+on completion, failure or cancellation and restarts for the next attempt. The next-run
+countdown appears during the poll delay, including the delay after a failed cycle;
+during processing it says "After this cycle", and when stopped it shows a dash.
+
+The Dashboard shows separate provider-reported Input and Output token counters
+for the commit, today and all time. Both counters persist across restarts. Historical
+total-only records are retained but cannot be retroactively split: unavailable
+breakdowns show "Unavailable", and partially known counters show "+ ?". Missing
+input/output fields from the provider are not treated as known zeroes.
+
+The Dashboard also tracks provider-reported token totals for this repository/commit
+(including retries), the current local calendar day, and all reviews since tracking
+was enabled. Input and output tokens are counted from API `usage`, never estimated
+from character counts; repeated input/context is included as reported by the provider.
+Streaming requests set `stream_options.include_usage=true`. A provider that rejects
+that standard option must be configured/upgraded to support it; no silent retry is sent.
+Latest cumulative usage per response is recorded once, including known usage from
+failed/incomplete responses. Requests without usage are counted and explicitly marked
+as unknown/incomplete totals, not zero-cost requests. Counts update after each response
+when usage is available, not per generated token. No historical usage is invented.
+`token-usage.json` in the application data directory persists daily, per-commit and
+all-time totals using an atomic replacement. Corrupt history is preserved and reported,
+not overwritten with zero counters. Totals cover review requests, not connection tests.
+
+**Clear journal** on the Journal tab confirms and clears `journal.log`, its rotated
+copy and the Dashboard's recent entries. New activity may immediately create new
+entries. Reports, token statistics and the separate detailed model log are untouched.
+
+[Back to contents](#contents)
+
+## Reports And Notifications
+
+After the report is written (and the automatic cursor saved), the app requests
+one tray balloon per completed commit, including `NO_BUGS`. Historical unstructured
+reports remain readable; new incomplete/unstructured agent replies are retried and,
+if exhausted, recorded as failed before advancing the cursor. Empty diffs are marked as
+not sent to the model, rather than claiming no bugs. Failed or canceled reviews
+do not generate completion notifications. Notification failures do not affect
+review state. Windows notification settings may suppress or coalesce balloons.
+
+If cursor saving fails or is canceled after report writing, the next automatic
+attempt may receive a different model result. It atomically replaces that commit's
+report entry before saving the cursor and publishing completion, so
+the notification matches the persisted outcome without duplicate entries.
+Automatic and manual reviews of the same SHA update one entry with the latest
+outcome; legacy duplicate entries for that SHA are consolidated. Other commits are
+preserved. **Clear report** on the Dashboard clears only the selected repository and
+branch, with confirmation and a `.cleared-*.bak` backup alongside the report.
+It does not reset the review cursor or modify queued emails. Running reviews may
+write new entries after clearing.
+
+The model returns plain text blocks:
+
+```text
+BUG
+FILE: calculator.py
+LINE: 12
+SIDE: OLD
+DESCRIPTION: The division-by-zero validation was removed.
+END
 ```
 
-Clone or place the test repository as `GitReviewer.Tests` next to `GitReviewer`,
-then run these commands from `GitReviewer`. Tests cover linked worktrees and their
-shared object store, case-sensitive refs, custom
-remote mappings, dirty checkout preservation, cursor migration, manual and
-automatic completion, native multi-turn/multi-call tool flow, paged output,
-unknown tools, malformed arguments/responses, incomplete finals, budgets,
-failures, and cancellation. Real Git fixtures check immutable SHA reads, root
-commits, dirty files, unsafe paths, binary changes and symlink blobs. Plink checks
-cover path persistence, shell-safe custom paths, blank-path detection, missing
-paths, and background fetch. In-flight manual and automatic model requests are
-also checked for clean cancellation without completion notifications. This local
-test project is ignored and is not included in the production distribution.
-The second command checks embedded EN/RU prompt loading and verifies that legacy
-prompt files are ignored and preserved, including read-only files.
-The WPF project can be built on Linux with `dotnet build`, but running and
-interactively checking the GUI and tray notifications requires Windows.
+If no bugs are found, the expected response is:
 
-## User Data
+```text
+NO_BUGS
+```
 
-### SMTP notifications
+[Back to contents](#contents)
+
+## SMTP notifications
 
 The **Mail** tab configures the SMTP host/port, `None`, required `StartTls` or
 `SslOnConnect`, optional username/password, sender and semicolon-separated
@@ -657,7 +753,7 @@ delivery: loss of the server's final confirmation or a crash before saving deliv
 state can still produce a duplicate. Queue/settings write failures are logged;
 corrupt files are preserved rather than silently overwritten. SMTP protocol traces
 and passwords are not written to logs.
-The journal records why a notification is skipped (disabled, no findings, incomplete,
+The application-wide `journal.log` records why a notification is skipped (disabled, no findings, incomplete,
 or already queued/sent), and identifies queued/accepted messages by commit. A journal
 callback failure cannot terminate the mail worker. SMTP acceptance does not guarantee
 inbox delivery; repeated reviews of an already mailed SHA are still deduplicated.
@@ -673,12 +769,65 @@ Recipient addresses are now present in local logs: protect those logs accordingl
 Run isolated queue/credential tests using
 `dotnet run --project GitReviewer.Tests/Mail/Mail.csproj`. They do not send mail.
 
+[Back to contents](#contents)
+
+## Journal And Log
+
+The former Log tab is now **Journal** (**Журнал**) and retains general messages.
+Each project journal is appended to
+`%LOCALAPPDATA%\GitReviewer\logs\<project-id>\journal.log`; the last 500
+lines are loaded into the tab after a complete application restart. The file
+rotates at 8 MiB and one previous generation is retained as `journal.log.1`.
+
+The main window's **Log** (**Лог**) button opens a separate detailed model window.
+It records the complete JSON request body, raw HTTP response stream, assistant
+content, server-returned `reasoning` / `reasoning_content`, tool-call arguments,
+tool results, and lifecycle stages. Streaming responses appear while generation
+is in progress. Hidden chain-of-thought cannot be recovered when a server or model
+does not return those fields. Authorization headers, API keys, and environment
+variable values are never logged.
+
+Detailed data is appended to
+`%LOCALAPPDATA%\GitReviewer\logs\<project-id>\model.log`; it rotates
+at 32 MiB and keeps one previous generation as `model.log.1`. The Log window
+shows a bounded recent tail to keep WPF responsive, while the files hold the full
+retained exchange. These files contain prompts, repository paths, diffs, committed
+file contents, and model responses and must therefore be treated as sensitive.
+Closing Log does not interrupt review; reopening restores its recent tail. Hiding
+the main window also hides Log, and exiting the app closes it.
+
 New journal and detailed-log entries use local computer time in
 `yyyy-MM-dd HH:mm:ss` format, without an offset suffix. Existing log history is
 left unchanged. Reports include analysis duration (`HH:mm:ss.fff`) for each
 successful commit review, measured with a monotonic clock from commit preparation
 through model analysis and parsing. Fetch, retry waiting, and report writing are
 excluded; each attempt has its own duration.
+
+The selected project controls the Journal tab, recent Dashboard entries and the
+open Log window. Clearing a project log does not clear another project's files.
+Project IDs remain stable when names or positions change. Older shared log files
+are retained. The shared SMTP service continues to write to the application-wide
+`%LOCALAPPDATA%\GitReviewer\journal.log`.
+
+[Back to contents](#contents)
+
+## Crash diagnostics
+
+Unhandled WPF dispatcher, AppDomain, Windows Forms thread and unobserved task
+exceptions are recorded in separate `crashes/crash-*.log` files under the application
+data directory (by default `%LOCALAPPDATA%/GitReviewer`). Reports include time,
+application/runtime version, exception type/message, stack and inner exceptions,
+plus the last review context. UI fatal errors show the report path and are not
+silently ignored; the process terminates rather than continuing uncertain review state.
+Unobserved task exceptions are logged when the runtime raises that event.
+If the main directory is unwritable, reports fall back to `%TEMP%/GitReviewer-crashes`.
+Reports may contain local paths and exception data; inspect them before sharing.
+Forced process termination, power loss and severe runtime failures (for example
+stack overflow or insufficient memory to write a report) cannot be guaranteed to log.
+
+[Back to contents](#contents)
+
+## User Data
 
 User-specific files are stored in:
 
@@ -692,122 +841,61 @@ application to use a different data directory.
 The directory contains:
 
 ```text
+projects.json        Saved project IDs, names, repository settings and active selection
 models.conf          Model profiles and optional API keys
-settings.conf        Repository, branch ref, authentication, interval, fetch, language
+settings.conf        Legacy settings retained after project migration
 state.json           Last reviewed commit for each repository and branch
+token-usage.json      Persistent token statistics
+mail-settings.json   SMTP settings and protected credentials
+mail-queue.json      Pending notifications and delivery identifiers
+system-prompt.custom.*.txt  Optional EN/RU system prompt overrides
 reports\             Markdown review reports
+logs\<project-id>\   Per-project journal.log and model.log, plus rotated copies
+journal.log          Shared SMTP diagnostics and retained legacy journal
+model-log.log        Retained legacy detailed log
+crashes\             Crash reports
+diagnostics\         Rejected model report diagnostics
 ```
 
 These files are not committed to Git.
 
-## Model working hours
+[Back to contents](#contents)
 
-On **Project**, enable **Do not run model (local time)** and enter a daily blocked
-interval in `HH:mm`, e.g. `09:00`–`18:00`. It is stored per project; disabled by
-default. Overnight intervals such as `22:00`–`06:00` are supported. Start is inclusive,
-end exclusive; equal/invalid times are rejected. Changes apply on the next Start.
+## Focused Checks
 
-Automatic review waits before starting a cycle/commit, and checks again before every
-model request. An in-flight request may finish; a further request is prevented.
-An interrupted review restarts the same commit with a fresh session after the pause;
-no failed report, skipped cursor, email or retry-budget charge is produced by the
-schedule. Tokens already used remain counted. Dashboard status/next-run time show
-the pause. Stop/Exit cancels the wait. Manual reviews and model connection tests
-also respect the interval, but need manual restart if blocked. SMTP delivery is
-independent of the model schedule.
+The separate `GitReviewer.Tests` repository links production services and
+uses a fake HTTP handler, isolated data paths, and temporary Git repositories.
+Its extended Git transport fixture runs on Linux using a local SSH shim; no
+server or credentials are required:
 
-## Submodules
+```sh
+dotnet run --project ../GitReviewer.Tests/GitReviewer.Tests.csproj
+dotnet run --project ../GitReviewer.Tests/PromptMigration/PromptMigration.csproj
+```
 
-Review understands Git `160000` gitlink entries, including additions, deletions,
-pointer updates across several commits, and nested changes (up to 8 levels).
-The main `git_diff` response lists changed submodules with their exact old/new SHAs.
-The agent must read every listed module's complete diff using the `submodule`
-argument, including nested entries. A parent-only diff cannot produce a successful
-final review. Findings inside modules use full paths such as `lib/src/file.cs`.
+Clone or place the test repository as `GitReviewer.Tests` next to `GitReviewer`,
+then run these commands from `GitReviewer`. Tests cover linked worktrees and their
+shared object store, case-sensitive refs, custom
+remote mappings, dirty checkout preservation, cursor migration, manual and
+automatic completion, native multi-turn/multi-call tool flow, paged output,
+unknown tools, malformed arguments/responses, incomplete finals, budgets,
+failures, and cancellation. Real Git fixtures check immutable SHA reads, root
+commits, dirty files, unsafe paths, binary changes and symlink blobs. Plink checks
+cover path persistence, shell-safe custom paths, blank-path detection, missing
+paths, and background fetch. In-flight manual and automatic model requests are
+also checked for clean cancellation without completion notifications. This local
+test project is ignored and is not included in the production distribution.
+The second command checks embedded EN/RU prompt loading and verifies that legacy
+prompt files are ignored and preserved, including read-only files.
+The WPF project can be built on Linux with `dotnet build`, but running and
+interactively checking the GUI and tray notifications requires Windows.
 
-All six Git tools accept `submodule`; file/tree/search paths are then relative to
-that module. Only the two pinned gitlink commits are allowed, not their arbitrary
-ancestors. A pointer update is compared across its entire old-to-new range; adding
-or deleting a module compares against the empty tree. Working-copy contents are
-never used as review evidence. Child snapshots share the main session's disk budget.
-
-Modules must be initialized locally at their repository paths. Missing directories,
-missing pinned objects, symlink/junction module paths or excessive nesting produce
-an incomplete review, not a clean result. Renamed/deleted modules must still have
-their local repositories available at the historical paths to inspect removed code.
-Only changed modules are exposed to the model in this version.
-
-**Fetch initialized submodules on demand** is a per-project opt-in, disabled by
-default. With the main fetch checkbox enabled it uses Git's recursive on-demand
-fetch for initialized modules; the existing Git transfer log and timeout apply.
-It can contact different configured remotes using the selected credentials: enable
-it only for trusted repositories. It never automatically initializes/clones a new
-module. With fetch disabled, review is local-only. Missing historical objects may
-still require fetching the affected module manually.
-
-**Update submodules after branch advancement** is saved per project and enabled
-by default (including older configurations). This refers to the existing fast-forward
-workflow, not rebase. When disabled, advancement does not run submodule checkout:
-their working copies keep their current SHAs. The clean-working-copy guard remains
-active, so a subsequent advancement may require manually aligning the modules.
-
-When enabled, after a clean local branch advances, initialized modules are checked out to their
-pinned commits recursively, with `--no-fetch --checkout`, no force and hooks/network
-disabled. Dirty modules still block advancement; changes are never stashed or
-discarded. If module checkout fails after the parent fast-forward, the error is
-shown and monitoring must resolve the working-copy state before continuing.
-
-For a trusted repository, initialize modules yourself with
-`git submodule update --init --recursive` before review. This command may download
-repositories and change their working files; check local changes and URLs first.
-
-## Multiple projects
-
-The top navigation is shared by all tabs: numbered buttons select saved projects,
-**+** adds a project and **−** removes it from the list after confirmation. Hover a
-number to see its repository and branch. Removing an entry never deletes repository
-files, reports, queued mail or review progress.
-
-Select a project and click **Rename…** to replace its number with a custom name
-(up to 80 characters). Clear the name to return to numbering. Names persist across
-restarts and can be changed while a project runs; renaming does not change its
-stable ID, logs, reports or review position.
-
-Each project stores its repository, branch, polling interval, fetch flag and Git
-authentication settings. Changes are saved when switching or exiting. The selected
-project survives restart. On first launch, `settings.conf` is imported as project 1
-into an atomically saved `projects.json`; the legacy file is left unchanged.
-Corrupt or unsupported project catalogs are not silently overwritten.
-
-Projects can run automatic reviews concurrently: start one, switch by its number,
-and start another. Switching does not stop background projects. Start/Stop apply
-only to the selected project; running entries show ▶. Each project retains its
-own status, commit, timers, schedule, queue count and cancellation. Removing a
-running project stops only that worker; Exit awaits all workers. A manual review
-must finish before switching (other automatic workers continue).
-The new selection does not start automatically. The same working copy, or the
-same branch of a shared Git store, cannot be run twice concurrently; use distinct
-worktrees and branches. Git fetches sharing a Git store remain serialized.
-Journal and detailed-log review entries include repository/branch context.
-Each saved project has a stable ID and its own `logs/<project-id>/journal.log`
-and `model.log` under the application data directory (with independent rotation
-and clearing). The dashboard, Journal and open Log window follow the selected
-project, including background reviews. Removing a project keeps its log files.
-Old shared logs are retained, not reassigned to an arbitrary project; shared SMTP
-service messages continue in the application-wide `journal.log`.
-Parallel reviews consume provider quota concurrently; rate limits still apply.
-Review positions and reports remain
-keyed by repository Git identity and branch, so two entries for the same repository
-and branch share progress. Model profiles, SMTP settings, prompts, language, the
-journal and daily/all-time token totals are application-wide.
-
-Run migration checks with `dotnet run --project GitReviewer.Tests/PromptMigration/PromptMigration.csproj`
-and isolated UI switching/layout checks with `dotnet run --project GitReviewer.Tests/ProjectsUi/ProjectsUi.csproj`.
+[Back to contents](#contents)
 
 ## Language
 
 Select English or Russian on the **Project** tab. The choice is saved in
-`settings.conf` and applies to the GUI, tray menu, log messages, reports, and
+the project catalog (with migration from `settings.conf`) and applies to the GUI, tray menu, log messages, reports, and
 model instructions.
 
 System prompts are embedded in the executable from `GitReviewer/system-prompt.example.txt`
@@ -820,3 +908,5 @@ over the embedded default, including after application updates. **Reset to defau
 removes the current language's override after confirmation. Changes apply to the
 next review, not a running model request. Legacy `system-prompt.txt` files in AppData
 remain ignored and are never rewritten or deleted.
+
+[Back to contents](#contents)
