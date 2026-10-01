@@ -83,6 +83,9 @@ public sealed class ConfigurationStore
                 case "fetch_submodules" when bool.TryParse(value, out var modules):
                     settings.FetchSubmodules = modules;
                     break;
+                case "quiet_hours_enabled" when bool.TryParse(value, out var quiet): settings.QuietHoursEnabled = quiet; break;
+                case "quiet_hours_start": settings.QuietHoursStart = value; break;
+                case "quiet_hours_end": settings.QuietHoursEnd = value; break;
                 case "git_authentication_mode":
                     settings.GitAuthenticationMode = value is "ssh-agent" or "ssh-key" or "putty-key" or "https"
                         ? value
@@ -102,6 +105,7 @@ public sealed class ConfigurationStore
 
     public void SaveSettings(AppSettings settings)
     {
+        _ = new DailyModelSchedule(settings);
         if (File.Exists(ProjectsPath))
         {
             var catalog = LoadProjects();
@@ -117,6 +121,9 @@ public sealed class ConfigurationStore
             .AppendLine($"poll_interval_seconds={settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture)}")
             .AppendLine($"pull_enabled={settings.PullEnabled.ToString().ToLowerInvariant()}")
             .AppendLine($"fetch_submodules={settings.FetchSubmodules.ToString().ToLowerInvariant()}")
+            .AppendLine($"quiet_hours_enabled={settings.QuietHoursEnabled.ToString().ToLowerInvariant()}")
+            .AppendLine($"quiet_hours_start={settings.QuietHoursStart}")
+            .AppendLine($"quiet_hours_end={settings.QuietHoursEnd}")
             .AppendLine($"language={settings.Language}")
             .AppendLine($"git_authentication_mode={settings.GitAuthenticationMode}")
             .AppendLine($"ssh_private_key_path={settings.SshPrivateKeyPath}")

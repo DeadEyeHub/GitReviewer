@@ -80,7 +80,8 @@ public sealed class ModelClient
         Action<ReviewStage>? progress = null,
         Action<string>? log = null,
         Action<ReviewStage, string>? activity = null,
-        Action<TokenUsage?>? usage = null)
+        Action<TokenUsage?>? usage = null,
+        Action? beforeRequest = null)
     {
         ValidateProfile(profile);
         var callerToken = cancellationToken;
@@ -173,6 +174,7 @@ public sealed class ModelClient
                 if (apiKey.Length > 0) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 log?.Invoke("API request body: " + await request.Content.ReadAsStringAsync(cancellationToken));
                 progress?.Invoke(ReviewStage.Request);
+                beforeRequest?.Invoke();
                 var responseTask = _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                 progress?.Invoke(ReviewStage.Waiting);
                 using var response = await responseTask;
@@ -324,6 +326,7 @@ public sealed class ModelClient
             log?.Invoke("Git agent: " + message);
             throw new TimeoutException(message, exception);
         }
+        catch (ModelSchedulePauseException) { log?.Invoke("Git agent: paused by schedule; no failed review recorded."); throw; }
         catch (OperationCanceledException) { log?.Invoke("Git agent: canceled"); throw; }
         catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException or IndexOutOfRangeException)
         {

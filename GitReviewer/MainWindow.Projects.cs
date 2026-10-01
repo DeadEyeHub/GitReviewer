@@ -44,6 +44,8 @@ public partial class MainWindow
             RepositoryPath = RepositoryPathTextBox.Text.Trim(), BranchRef = _selectedBranch,
             PollIntervalSeconds = interval, PullEnabled = PullEnabledCheckBox.IsChecked == true,
             FetchSubmodules = FetchSubmodulesCheckBox.IsChecked == true,
+            QuietHoursEnabled = QuietHoursCheckBox.IsChecked == true,
+            QuietHoursStart = QuietStartTextBox.Text.Trim(), QuietHoursEnd = QuietEndTextBox.Text.Trim(),
             Language = Localization.Language, GitAuthenticationMode = _authenticationNeedsDetection ? "auto" : GetAuthenticationMode(),
             SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim(), PlinkPath = PlinkPathTextBox.Text.Trim()
         });

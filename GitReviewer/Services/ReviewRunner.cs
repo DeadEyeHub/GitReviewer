@@ -17,6 +17,8 @@ public sealed class ReviewRunner
     private string _activeCommit = string.Empty;
     private int _remaining;
     private int _retryDelaySeconds;
+    private DailyModelSchedule _schedule = new(new AppSettings());
+    private readonly Func<DateTime> _localNow;
     public event Action<int?>? RemainingChanged;
     public event Action<DateTimeOffset?>? NextRunChanged;
     public event Action<(string Repository, string Sha, TokenUsage? Usage)>? UsageReceived;
@@ -44,13 +46,15 @@ public sealed class ReviewRunner
         ModelClient model,
         ConfigurationStore configuration,
         StateStore stateStore,
-        ReportWriter reportWriter)
+        ReportWriter reportWriter,
+        Func<DateTime>? localNow = null)
     {
         _git = git;
         _model = model;
         _configuration = configuration;
         _stateStore = stateStore;
         _reportWriter = reportWriter;
+        _localNow = localNow ?? (() => DateTime.Now);
     }
 
     public bool Start(AppSettings settings, ModelProfile profile)
@@ -61,6 +65,7 @@ public sealed class ReviewRunner
                 return false;
 
             profile.Parameters.Validate();
+            _schedule = new DailyModelSchedule(settings);
             _cancellation?.Dispose();
             _cancellation = new CancellationTokenSource();
             _retryDelaySeconds = settings.PollIntervalSeconds;
@@ -103,7 +108,9 @@ public sealed class ReviewRunner
 
         try
         {
+            _schedule = new DailyModelSchedule(settings);
             _activeCommit = string.Empty;
+            _schedule.Check(_localNow());
             var repositoryPath = Path.GetFullPath(settings.RepositoryPath);
             await _git.ValidateRepositoryAsync(repositoryPath, cancellationToken);
             var identity = await _git.GetRepositoryIdentityAsync(repositoryPath, cancellationToken);
@@ -120,6 +127,11 @@ public sealed class ReviewRunner
                 "Выбранный коммит {0} проверен, замечаний: {1}.",
                 Short(sha), result.Findings.Count));
             return result;
+        }
+        catch (ModelSchedulePauseException)
+        {
+            Emit(ReviewStage.ScheduledPause, profile, _activeCommit);
+            throw;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -182,6 +194,7 @@ public sealed class ReviewRunner
         {
             try
             {
+                await WaitForScheduleAsync(cancellationToken);
                 _activeCommit = string.Empty;
                 Publish(RemainingChanged, (int?)null);
                 await RunCycleAsync(settings, profile, cancellationToken);
@@ -191,6 +204,12 @@ public sealed class ReviewRunner
                     "Waiting {0} sec.",
                     "Ожидание {0} сек.",
                     settings.PollIntervalSeconds));
+            }
+            catch (ModelSchedulePauseException exception)
+            {
+                Emit(ReviewStage.ScheduledPause, profile, _activeCommit);
+                Publish(Log, exception.Message);
+                continue;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -397,6 +416,7 @@ public sealed class ReviewRunner
         CancellationToken cancellationToken)
     {
         _activeCommit = sha;
+        _schedule.Check(_localNow());
         StatusChanged?.Invoke(Localization.Format("Reviewing {0}", "Проверяется {0}", Short(sha)));
         CommitChanged?.Invoke(Short(sha));
         Emit(ReviewStage.Started, profile, sha);
@@ -415,6 +435,7 @@ public sealed class ReviewRunner
                 result = await AnalyzeAsync(repositoryPath, branch, sha, profile, repositoryIdentity, cancellationToken);
                 break;
             }
+            catch (ModelSchedulePauseException) { throw; }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception exception)
             {
@@ -461,12 +482,30 @@ public sealed class ReviewRunner
                 stage => Emit(stage, profile, sha, stage == ReviewStage.AgentStarted
                     ? profile.Parameters.ReviewMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture) : ""), message =>
                     Publish(ModelLog, message), (stage, detail) => Emit(stage, profile, sha, detail),
-                usage => Publish(UsageReceived, (repositoryIdentity, sha, usage)));
+                usage => Publish(UsageReceived, (repositoryIdentity, sha, usage)),
+                beforeRequest: () => _schedule.Check(_localNow()));
             Emit(ReviewStage.Parsing, profile, sha);
             result = ReviewParser.Parse(response);
         }
 
         return result;
+    }
+
+    private async Task WaitForScheduleAsync(CancellationToken token)
+    {
+        if (!_schedule.IsBlocked(_localNow())) return;
+        Publish(Log, Localization.Text("Model paused by daily schedule.", "Модель приостановлена по ежедневному расписанию."));
+        try
+        {
+            while (_schedule.IsBlocked(_localNow()))
+            {
+                var resume = _schedule.ResumeAt(_localNow());
+                Publish(StatusChanged, Localization.Format("Scheduled pause until {0:HH:mm}", "Пауза по расписанию до {0:HH:mm}", resume));
+                Publish(NextRunChanged, (DateTimeOffset?)new DateTimeOffset(resume));
+                await Task.Delay(TimeSpan.FromSeconds(5), token);
+            }
+        }
+        finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
     }
 
     private static string Short(string sha) => sha[..Math.Min(8, sha.Length)];

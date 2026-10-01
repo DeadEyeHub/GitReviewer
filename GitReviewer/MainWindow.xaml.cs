@@ -277,6 +277,9 @@ public partial class MainWindow : Window
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
         FetchSubmodulesCheckBox.IsChecked = settings.FetchSubmodules;
+        QuietHoursCheckBox.IsChecked = settings.QuietHoursEnabled;
+        QuietStartTextBox.Text = settings.QuietHoursStart;
+        QuietEndTextBox.Text = settings.QuietHoursEnd;
         SshKeyPathTextBox.Text = settings.SshPrivateKeyPath;
         PlinkPathTextBox.Text = settings.PlinkPath;
         _loadingAuthentication = false;
@@ -324,6 +327,8 @@ public partial class MainWindow : Window
         BrowseButton.Content = Localization.Text("Browse...", "Обзор...");
         IntervalLabel.Text = Localization.Text("Interval, seconds", "Интервал, секунд");
         ReceiveChangesLabel.Text = Localization.Text("Receive changes", "Получение изменений");
+        QuietHoursCheckBox.Content = Localization.Text("Do not run model (local time):", "Не запускать модель (местное время):");
+        QuietHoursCheckBox.ToolTip = Localization.Text("Daily interval, HH:mm; overnight intervals are supported. In-flight requests may finish. Interrupted reviews restart after the pause, without marking the commit failed. Applies to the next Start.", "Ежедневный интервал ЧЧ:мм, в том числе через полночь. Отправленный запрос может завершиться. Прерванное ревью начнётся заново после паузы, без отметки об ошибке. Применяется при следующем запуске проверки.");
         FetchSubmodulesCheckBox.Content = Localization.Text("Fetch initialized submodules on demand", "Получать изменения инициализированных сабмодулей при необходимости");
         FetchSubmodulesCheckBox.ToolTip = Localization.Text("Requires fetch above. Uses configured submodule remotes; may connect to other servers using the selected credentials. Enable only for trusted repositories. Does not clone uninitialized modules.", "Требует включённого fetch. Использует настроенные remote сабмодулей: возможны подключения к другим серверам с выбранными учётными данными. Только для доверенных репозиториев. Не клонирует неинициализированные сабмодули.");
         PullEnabledCheckBox.Content = Localization.Text(
@@ -857,6 +862,8 @@ public partial class MainWindow : Window
             "Проверяется подключение...");
         try
         {
+            new DailyModelSchedule(new AppSettings { QuietHoursEnabled = QuietHoursCheckBox.IsChecked == true,
+                QuietHoursStart = QuietStartTextBox.Text.Trim(), QuietHoursEnd = QuietEndTextBox.Text.Trim() }).Check(DateTime.Now);
             var status = await _model.TestConnectionAsync(
                 ReadProfileFromForm(), CancellationToken.None);
             if (version == _modelRequestVersion && !_exitRequested)
@@ -1125,6 +1132,8 @@ public partial class MainWindow : Window
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
             FetchSubmodules = FetchSubmodulesCheckBox.IsChecked == true,
+            QuietHoursEnabled = QuietHoursCheckBox.IsChecked == true,
+            QuietHoursStart = QuietStartTextBox.Text.Trim(), QuietHoursEnd = QuietEndTextBox.Text.Trim(),
             Language = Localization.Language,
             GitAuthenticationMode = GetAuthenticationMode(),
             SshPrivateKeyPath = SshKeyPathTextBox.Text.Trim(),
@@ -1398,7 +1407,7 @@ public partial class MainWindow : Window
                 var repository = string.IsNullOrWhiteSpace(_repositoryCommonGitDirectory) ? _repositoryPath : _repositoryCommonGitDirectory;
                 _usageCommitKey = string.IsNullOrWhiteSpace(repository) ? null : TokenUsageStore.Key(repository, progress.Commit);
             }
-            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled)
+            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled or ReviewStage.ScheduledPause)
             {
                 _commitClock.Stop();
                 _agentClock.Stop();
@@ -1434,6 +1443,7 @@ public partial class MainWindow : Window
             ReviewStage.AgentStarted => Localization.Text("Review timer started (minutes)", "Таймер проверки запущен (минуты)"),
             ReviewStage.Failed => Localization.Text("Commit review failed", "Ошибка проверки коммита"),
             ReviewStage.Canceled => Localization.Text("Commit review canceled", "Проверка коммита отменена"),
+            ReviewStage.ScheduledPause => Localization.Text("Review paused by schedule", "Проверка приостановлена по расписанию"),
             _ => progress.Stage.ToString()
         };
         var shortCommit = commit[..Math.Min(8, commit.Length)];

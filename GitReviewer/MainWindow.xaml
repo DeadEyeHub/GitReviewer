@@ -86,9 +86,15 @@
                             Content="Browse..." Click="BrowseRepository_Click" />
 
                     <TextBlock x:Name="IntervalLabel" Grid.Row="1" Grid.Column="0" Margin="0,7,12,12" Text="Interval, seconds" />
-                    <TextBox x:Name="IntervalTextBox" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
-                             Width="120" HorizontalAlignment="Left" Margin="0,0,0,12"
-                             VerticalContentAlignment="Center" />
+                    <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12">
+                        <TextBox x:Name="IntervalTextBox" Width="120" HorizontalAlignment="Left" VerticalContentAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <CheckBox x:Name="QuietHoursCheckBox" Content="Do not run model (local time):" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox x:Name="QuietStartTextBox" Text="09:00" Width="55" />
+                            <TextBlock Text=" — " VerticalAlignment="Center" />
+                            <TextBox x:Name="QuietEndTextBox" Text="18:00" Width="55" />
+                        </StackPanel>
+                    </StackPanel>
 
                     <TextBlock x:Name="ReceiveChangesLabel" Grid.Row="2" Grid.Column="0" Margin="0,7,12,12" Text="Receive changes" />
                     <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,7,0,12">

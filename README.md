@@ -696,6 +696,22 @@ reports\             Markdown review reports
 
 These files are not committed to Git.
 
+## Model working hours
+
+On **Project**, enable **Do not run model (local time)** and enter a daily blocked
+interval in `HH:mm`, e.g. `09:00`–`18:00`. It is stored per project; disabled by
+default. Overnight intervals such as `22:00`–`06:00` are supported. Start is inclusive,
+end exclusive; equal/invalid times are rejected. Changes apply on the next Start.
+
+Automatic review waits before starting a cycle/commit, and checks again before every
+model request. An in-flight request may finish; a further request is prevented.
+An interrupted review restarts the same commit with a fresh session after the pause;
+no failed report, skipped cursor, email or retry-budget charge is produced by the
+schedule. Tokens already used remain counted. Dashboard status/next-run time show
+the pause. Stop/Exit cancels the wait. Manual reviews and model connection tests
+also respect the interval, but need manual restart if blocked. SMTP delivery is
+independent of the model schedule.
+
 ## Submodules
 
 Review understands Git `160000` gitlink entries, including additions, deletions,
