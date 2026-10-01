@@ -625,7 +625,11 @@ TLS modes use normal certificate validation. OAuth is not implemented.
 
 After a successful saved review containing findings, a background service queues
 one message with that commit's report rendered as HTML in the body and attached as
-`commit-review.html`, with a plain-text fallback. Repository/model text is HTML-escaped;
+`commit-review.html` by default, with a plain-text fallback. **Report attachment format**
+on the Mail tab selects HTML or Markdown (`commit-review.md`); the body stays HTML.
+The choice is captured per message when queued, including test emails. Changing it
+does not rewrite pending messages. Legacy queue entries default to HTML.
+Repository/model text is HTML-escaped;
 scripts, remote images and raw HTML are not executed. Existing queued Markdown reports
 are converted at delivery time. Local reports remain Markdown.
 It does not attach the accumulated report history.

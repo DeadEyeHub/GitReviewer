@@ -13,6 +13,7 @@ public sealed class MailSettings
     public bool Enabled { get; set; }
     public bool SendToAuthor { get; set; }
     public bool SendWithoutBugs { get; set; }
+    public string AttachmentFormat { get; set; } = "html";
     public string Host { get; set; } = "";
     public int Port { get; set; } = 587;
     public string Security { get; set; } = "StartTls";
@@ -29,6 +30,7 @@ public sealed class MailSettings
         .Select(MailboxAddress.Parse).ToList();
     public void Validate()
     {
+        if (AttachmentFormat is not ("html" or "md")) throw new InvalidOperationException("Attachment format must be html or md.");
         if (string.IsNullOrWhiteSpace(Host) || Host.Any(char.IsWhiteSpace) || Host.Contains('/') || Port is < 1 or > 65535)
             throw new InvalidOperationException(Localization.Text("Invalid SMTP host or port.", "Некорректный SMTP-сервер или порт."));
         if (Security is not ("None" or "StartTls" or "SslOnConnect")) throw new InvalidOperationException("Invalid SMTP security mode.");
@@ -42,6 +44,7 @@ public sealed class MailSettings
 
 public sealed class MailJob
 {
+    public string AttachmentFormat { get; set; } = "html";
     public string Key { get; set; } = "";
     public string MessageId { get; set; } = "";
     public string Subject { get; set; } = "";
@@ -141,6 +144,7 @@ public sealed class MailNotifications : IAsyncDisposable
                 var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity + "\n" + review.BranchRef + "\n" + review.Sha)));
                 if (_jobs.Any(j => j.Key == key)) { _log("Mail: this commit is already queued or sent: " + review.Sha); return; }
                 var job = new MailJob { Key = key, MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
+                    AttachmentFormat = _settings.AttachmentFormat,
                     Subject = Clean($"[GitReviewer] {Path.GetFileName(review.RepositoryPath)} / {review.BranchRef} / {review.Sha[..Math.Min(8, review.Sha.Length)]} — bugs: {review.FindingCount}"),
                     Report = review.ReportMarkdown, From = _settings.From, Recipients = string.Join(";", recipients.Select(r => r.ToString())), NextAttempt = _now() };
                 _jobs.Add(job);
@@ -165,6 +169,7 @@ public sealed class MailNotifications : IAsyncDisposable
         SaveSettings(settings);
         await _sending.WaitAsync(token);
         var job = new MailJob { MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
+            AttachmentFormat = settings.AttachmentFormat,
             Subject = "GitReviewer SMTP test", Report = "SMTP test message from GitReviewer. No repository data is included.",
             From = settings.From, Recipients = settings.Recipients };
         try
@@ -264,7 +269,10 @@ public sealed class MailNotifications : IAsyncDisposable
             message.To.Add(MailboxAddress.Parse(address));
         var html = RenderHtml(job.Report);
         var body = new BodyBuilder { TextBody = job.Report, HtmlBody = html };
-        body.Attachments.Add("commit-review.html", Encoding.UTF8.GetBytes(html), new ContentType("text", "html"));
+        if (job.AttachmentFormat is not ("html" or "md")) throw new InvalidOperationException("Unsupported queued attachment format.");
+        var markdown = job.AttachmentFormat == "md";
+        body.Attachments.Add(markdown ? "commit-review.md" : "commit-review.html",
+            Encoding.UTF8.GetBytes(markdown ? job.Report : html), new ContentType("text", markdown ? "markdown" : "html"));
         message.Body = body.ToMessageBody();
         return message;
     }

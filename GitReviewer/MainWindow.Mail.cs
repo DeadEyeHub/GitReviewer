@@ -46,6 +46,11 @@ public partial class MainWindow
         MailPanel.Children.Add(password);
         var from = Field("From (Name <email@example.com>)", "Отправитель (Имя <email@example.com>)", settings.From);
         var recipients = Field("Recipients (separate with ;)", "Получатели (через ;)", settings.Recipients);
+        MailPanel.Children.Add(new Controls.TextBlock { Text = Localization.Text("Report attachment format", "Формат вложения отчёта"), Margin = new Thickness(0, 6, 0, 3) });
+        var attachmentFormat = new Controls.ComboBox { ItemsSource = new[] { "html", "md" }, SelectedItem = settings.AttachmentFormat,
+            Width = 120, HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+            ToolTip = Localization.Text("Email body remains HTML. Format is saved for each queued message; changes affect new messages only.", "Текст письма остаётся HTML. Формат сохраняется при постановке в очередь; изменения действуют только на новые письма.") };
+        MailPanel.Children.Add(attachmentFormat);
         var buttons = new Controls.WrapPanel { Margin = new Thickness(0, 12, 0, 8) };
         var save = new Controls.Button { Content = Localization.Text("Save", "Сохранить"), Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
         var test = new Controls.Button { Content = Localization.Text("Send test email", "Отправить тестовое письмо"), Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 0) };
@@ -60,7 +65,8 @@ public partial class MainWindow
         {
             if (!int.TryParse(port.Text, out var number)) throw new InvalidOperationException("Invalid SMTP port.");
             var value = new MailSettings { Enabled = enabled.IsChecked == true, SendToAuthor = toAuthor.IsChecked == true, SendWithoutBugs = noBugs.IsChecked == true, Host = host.Text.Trim(), Port = number,
-                Security = security.SelectedItem as string ?? "StartTls", Username = user.Text.Trim(), From = from.Text.Trim(), Recipients = recipients.Text.Trim() };
+                Security = security.SelectedItem as string ?? "StartTls", Username = user.Text.Trim(), From = from.Text.Trim(), Recipients = recipients.Text.Trim(),
+                AttachmentFormat = attachmentFormat.SelectedItem as string ?? "html" };
             value.SetPassword(password.Password);
             return value;
         }
