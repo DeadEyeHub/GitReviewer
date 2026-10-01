@@ -22,7 +22,7 @@ public partial class MainWindow : Window
     private readonly ModelClient _model = new();
     private readonly ReportWriter _reportWriter = new();
     private readonly StateStore _stateStore = new();
-    private readonly ReviewRunner _runner;
+    private ReviewRunner _runner => _activeRuntime.Runner;
     private MailNotifications _mail = null!;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly Icon _trayImage;
@@ -58,11 +58,11 @@ public partial class MainWindow : Window
     private readonly System.Windows.Threading.DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private LogWindow? _logWindow;
     private readonly TokenUsageStore _tokenUsage = new(Path.Combine(AppPaths.DataDirectory, "token-usage.json"));
-    private readonly System.Diagnostics.Stopwatch _commitClock = new();
-    private readonly System.Diagnostics.Stopwatch _agentClock = new();
-    private TimeSpan _agentTimeLimit = ModelClient.ReviewTimeLimit;
+    private System.Diagnostics.Stopwatch _commitClock => _activeRuntime.CommitClock;
+    private System.Diagnostics.Stopwatch _agentClock => _activeRuntime.AgentClock;
+    private TimeSpan _agentTimeLimit { get => _activeRuntime.AgentTimeLimit; set => _activeRuntime.AgentTimeLimit = value; }
     private ModelParameters _editingParameters = new();
-    private bool _automaticStopPending;
+    private bool _automaticStopPending { get => _activeRuntime.AutomaticStopPending; set => _activeRuntime.AutomaticStopPending = value; }
 
     public sealed class ParameterRow
     {
@@ -142,9 +142,9 @@ public partial class MainWindow : Window
         result.Validate();
         return result;
     }
-    private DateTimeOffset? _nextAutomaticRun;
-    private int? _remainingCommits;
-    private string? _usageCommitKey;
+    private DateTimeOffset? _nextAutomaticRun { get => _activeRuntime.NextRun; set => _activeRuntime.NextRun = value; }
+    private int? _remainingCommits { get => _activeRuntime.Remaining; set => _activeRuntime.Remaining = value; }
+    private string? _usageCommitKey { get => _activeRuntime.UsageKey; set => _activeRuntime.UsageKey = value; }
 
     public MainWindow()
     {
@@ -153,40 +153,12 @@ public partial class MainWindow : Window
         _mail = new MailNotifications(AppPaths.DataDirectory, message => AppendLog(message));
         ShowParameters(new ModelParameters());
 
-        _runner = new ReviewRunner(
-            _git, _model, _configuration, _stateStore, _reportWriter);
-        _runner.Log += AppendLog;
-        _runner.ModelLog += _details.Append;
+        InitializeProjectRuntimes();
         _git.Diagnostic += _details.Append;
         _git.TransferProgress += message =>
         {
             _journal.Append("Git fetch | " + message);
-            Dispatch(() => SetStatus("Git fetch | " + message));
         };
-        _runner.StatusChanged += status => Dispatch(() => SetStatus(status));
-        _runner.AutomaticStopped += () => Dispatch(() => _automaticStopPending = true);
-        _runner.CommitChanged += commit =>
-        {
-            CrashDiagnostics.Context = $"Repository: {_repositoryPath}; branch: {_selectedBranch}; commit: {commit}";
-            Dispatch(() => { CommitRun.Text = commit; CommitSubjectTextBlock.Text = string.Empty; CommitSubjectTextBlock.ToolTip = null; });
-        };
-        _runner.CommitInfoChanged += commit => Dispatch(() =>
-        {
-            CommitRun.Text = commit.Sha;
-            CommitSubjectTextBlock.Text = commit.Subject;
-            CommitSubjectTextBlock.ToolTip = commit.Subject;
-            CommitDetailsText.Text = $"{commit.Author} · {commit.Date.LocalDateTime:g}";
-        });
-        _runner.RemainingChanged += count => Dispatch(() => _remainingCommits = count);
-        _runner.NextRunChanged += next => Dispatch(() => _nextAutomaticRun = next);
-        _runner.UsageReceived += item =>
-        {
-            _tokenUsage.Record(item.Repository, item.Sha, item.Usage, DateTimeOffset.Now);
-            Dispatch(() => _usageCommitKey = TokenUsageStore.Key(item.Repository, item.Sha));
-        };
-        _runner.Progress += AppendProgress;
-        _runner.Reviewed += reviewed => Dispatch(() => NotifyReviewed(reviewed));
-        _runner.Reviewed += _mail.Enqueue;
         _logTimer.Tick += (_, _) => RefreshLogs();
         _logTimer.Start();
         RefreshLogs();
@@ -686,8 +658,10 @@ public partial class MainWindow : Window
     private async Task RefreshRepositoryInfoAsync()
     {
         var version = ++_repositoryVersion;
-        if (!_runner.IsRunning && _manualReviewTask is not { IsCompleted: false })
+        if (!_switchingProject && !_runner.IsRunning && _manualReviewTask is not { IsCompleted: false })
         {
+            _activeRuntime.Commit = "-";
+            _activeRuntime.Subject = _activeRuntime.Details = "";
             CommitRun.Text = "-";
             CommitSubjectTextBlock.Text = string.Empty;
             CommitSubjectTextBlock.ToolTip = null;
@@ -926,6 +900,7 @@ public partial class MainWindow : Window
         if (_switchingProject || _exitRequested || _manualReviewTask is { IsCompleted: false } || _settingStartCommit || _startingReview)
             return;
 
+        _startingReview = true;
         try
         {
             var settings = ReadSettingsFromForm();
@@ -936,6 +911,8 @@ public partial class MainWindow : Window
             StartButton.IsEnabled = false;
             _trayStartItem.Enabled = false;
             SetRepositoryControls(false);
+            await ReserveProjectScopeAsync(settings);
+            if (_exitRequested) return;
             _manualReviewCancellation = new CancellationTokenSource();
             _manualReviewTask = _runner.ReviewSingleCommitAsync(
                 settings, profile, revision, _manualReviewCancellation.Token);
@@ -952,6 +929,7 @@ public partial class MainWindow : Window
         }
         finally
         {
+            _startingReview = false;
             _manualReviewCancellation?.Dispose();
             _manualReviewCancellation = null;
             _manualReviewTask = null;
@@ -1011,6 +989,7 @@ public partial class MainWindow : Window
         try
         {
             var revision = CommitShaTextBox.Text.Trim();
+            await ReserveProjectScopeAsync(ReadSettingsFromForm());
             var sha = await _git.ResolveCommitAsync(repositoryPath, revision, CancellationToken.None);
             var head = await _git.GetBranchHeadAsync(repositoryPath, branch, CancellationToken.None);
             var commitInfo = await _git.GetCommitInfoAsync(repositoryPath, sha, CancellationToken.None);
@@ -1018,13 +997,16 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException(Localization.Text(
                     "The selected commit is not an ancestor of the selected branch tip.",
                     "Выбранный коммит не является предком вершины выбранной ветки."));
-            if (version != _repositoryVersion || repositoryPath != _repositoryPath ||
+            if (_exitRequested || version != _repositoryVersion || repositoryPath != _repositoryPath ||
                 repositoryIdentity != _repositoryCommonGitDirectory || branch != _selectedBranch)
                 throw new InvalidOperationException(Localization.Text(
                     "Repository selection changed. Select the start commit again.",
                     "Выбор репозитория изменился. Выберите стартовый коммит снова."));
             await _stateStore.SetStartCommitAsync(repositoryIdentity, branch, sha, CancellationToken.None);
             CommitRun.Text = sha[..8];
+            _activeRuntime.Commit = sha[..8];
+            _activeRuntime.Subject = commitInfo.Subject;
+            _activeRuntime.Details = $"{commitInfo.Author} · {commitInfo.Date.LocalDateTime:g}";
             CommitSubjectTextBlock.Text = commitInfo.Subject;
             CommitSubjectTextBlock.ToolTip = commitInfo.Subject;
             CommitDetailsText.Text = $"{commitInfo.Author} · {commitInfo.Date.LocalDateTime:g}";
@@ -1094,6 +1076,8 @@ public partial class MainWindow : Window
             if (_exitRequested) return;
             if (repositoryVersion != _repositoryVersion)
                 throw new InvalidOperationException(Localization.Text("Repository selection changed. Start again.", "Выбор репозитория изменился. Запустите снова."));
+            await ReserveProjectScopeAsync(settings);
+            if (_exitRequested) return;
             if (!_runner.Start(settings, profile))
                 throw new InvalidOperationException(Localization.Text(
                     "Another review operation is already running.",
@@ -1149,8 +1133,9 @@ public partial class MainWindow : Window
 
     private async Task StopReviewAsync()
     {
-        await _runner.StopAsync();
-        SetRunningControls(false);
+        var runtime = _activeRuntime;
+        await runtime.Runner.StopAsync();
+        if (runtime == _activeRuntime) SetRunningControls(false);
     }
 
     private async void OpenReport_Click(object sender, RoutedEventArgs e) => await OpenReportAsync();
@@ -1196,7 +1181,7 @@ public partial class MainWindow : Window
     {
         _logWindow?.Hide();
         Hide();
-        _trayIcon.Text = _runner.IsRunning
+        _trayIcon.Text = _projectRuntimes.Any(p => p.Runner.IsRunning)
             ? Localization.Text("Git Reviewer - running in background", "Git Reviewer - работает в фоне")
             : Localization.Text("Git Reviewer - stopped", "Git Reviewer - остановлен");
     }
@@ -1237,7 +1222,7 @@ public partial class MainWindow : Window
                     exception.Message));
             }
         }
-        await _runner.StopAsync();
+        await Task.WhenAll(_projectRuntimes.Select(p => p.Runner.StopAsync()));
         _logTimer.Stop();
         await _mail.DisposeAsync();
         RefreshLogs();
@@ -1290,6 +1275,7 @@ public partial class MainWindow : Window
 
     private void SetStatus(string status)
     {
+        _activeRuntime.Status = status;
         StatusRun.Text = status;
         _trayIcon.Text = TruncateTrayText($"Git Reviewer - {status.ToLowerInvariant()}");
     }
@@ -1312,6 +1298,7 @@ public partial class MainWindow : Window
 
     private void RefreshDashboard()
     {
+        ShowRuntimeDashboard();
         if (_mailCounts is not null)
         {
             var counts = _mail.Counts();
@@ -1399,37 +1386,36 @@ public partial class MainWindow : Window
         _logWindow.Activate();
     }
 
-    private void AppendProgress(ReviewProgress progress)
+    private void AppendProgress(ProjectRuntime runtime, ReviewProgress progress)
     {
         Dispatch(() =>
         {
             if (progress.Stage == ReviewStage.Started)
             {
-                _commitClock.Restart();
-                _agentClock.Reset();
-                CommitDetailsText.Text = string.Empty;
-                var repository = string.IsNullOrWhiteSpace(_repositoryCommonGitDirectory) ? _repositoryPath : _repositoryCommonGitDirectory;
-                _usageCommitKey = string.IsNullOrWhiteSpace(repository) ? null : TokenUsageStore.Key(repository, progress.Commit);
+                runtime.CommitClock.Restart();
+                runtime.AgentClock.Reset();
+                runtime.Details = string.Empty;
+                runtime.UsageKey = string.IsNullOrWhiteSpace(runtime.Identity) ? null : TokenUsageStore.Key(runtime.Identity, progress.Commit);
             }
             else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled or ReviewStage.ScheduledPause)
             {
-                _commitClock.Stop();
-                _agentClock.Stop();
+                runtime.CommitClock.Stop();
+                runtime.AgentClock.Stop();
             }
             else if (progress.Stage == ReviewStage.AgentStarted)
             {
-                _agentTimeLimit = int.TryParse(progress.Detail, out var minutes)
+                runtime.AgentTimeLimit = int.TryParse(progress.Detail, out var minutes)
                     ? TimeSpan.FromMinutes(minutes) : ModelClient.ReviewTimeLimit;
-                _agentClock.Restart();
+                runtime.AgentClock.Restart();
             }
-            else if (progress.Stage == ReviewStage.Parsing) _agentClock.Stop();
+            else if (progress.Stage == ReviewStage.Parsing) runtime.AgentClock.Stop();
         });
         var model = new string(progress.Model.Where(c => !char.IsControl(c)).Take(160).ToArray());
         var commit = progress.Commit.Length is > 0 and <= 40 && progress.Commit.All(Uri.IsHexDigit) ? progress.Commit : "-";
         var detail = new string(progress.Detail.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
         if (detail.Length > 2000)
             detail = detail[..950] + " ... " + detail[^1045..];
-        var entry = $"{model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}";
+        var entry = $"{runtime.Label} | {model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}";
         _details.Append(entry);
         // Transport events stay in the detailed log; the journal describes review activity.
         if (progress.Stage is ReviewStage.Waiting or ReviewStage.Response or ReviewStage.Parsing or ReviewStage.SavingCursor)
@@ -1451,7 +1437,7 @@ public partial class MainWindow : Window
             _ => progress.Stage.ToString()
         };
         var shortCommit = commit[..Math.Min(8, commit.Length)];
-        _journal.Append($"{model} | {shortCommit} | {description}{(detail.Length > 0 ? " | " + detail : "")}");
+        _journal.Append($"{runtime.Label} | {model} | {shortCommit} | {description}{(detail.Length > 0 ? " | " + detail : "")}");
     }
 
     private void NotifyReviewed(CommitReviewed reviewed)

@@ -70,15 +70,11 @@ public partial class MainWindow
             if (target == -2 && (catalog.Projects.Count == 1 || System.Windows.MessageBox.Show(
                 Localization.Text("Remove this project from the list? Repository files, reports and review progress will be kept.", "Убрать проект из списка? Файлы репозитория, отчёты и позиция проверки сохранятся."),
                 "GitReviewer", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)) return;
-            if (_runner.IsRunning && System.Windows.MessageBox.Show(
-                Localization.Text("Stop the current review and switch projects? Start the new project manually when ready.", "Остановить текущую проверку и переключить проект? Новый проект запускается кнопкой «Старт»."),
-                "GitReviewer", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             SaveProjectDraft();
             _switchingProject = true;
             MainTabs.IsEnabled = ProjectButtons.IsEnabled = AddProjectButton.IsEnabled = RemoveProjectButton.IsEnabled = false;
-            await StopReviewAsync();
-            // Drain queued events from the old review before resetting the dashboard.
-            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            // Removing a project stops only its own worker; ordinary switching never stops it.
+            if (target == -2) await StopReviewAsync();
             if (_exitRequested) return;
             ++_repositoryVersion;
             ++_commitListVersion;
@@ -86,19 +82,22 @@ public partial class MainWindow
             if (target == -1)
             {
                 catalog.Projects.Add(new AppSettings { Language = Localization.Language });
+                _projectRuntimes.Add(CreateProjectRuntime(catalog.Projects[^1]));
                 catalog.ActiveIndex = catalog.Projects.Count - 1;
             }
             else if (target == -2)
             {
                 catalog.Projects.RemoveAt(catalog.ActiveIndex);
+                _projectRuntimes.RemoveAt(catalog.ActiveIndex);
                 catalog.ActiveIndex = Math.Min(catalog.ActiveIndex, catalog.Projects.Count - 1);
             }
             else catalog.ActiveIndex = target;
             _configuration.SaveProjects(catalog);
+            _activeRuntime = _projectRuntimes[catalog.ActiveIndex];
             var settings = catalog.Projects[catalog.ActiveIndex];
             _repositoryReady = false;
             _repositoryPath = _repositoryCommonGitDirectory = _testedRepositoryIdentity = string.Empty;
-            _repositoryWasKnown = _automaticStopPending = false;
+            _repositoryWasKnown = false;
             _loadingRepository = true;
             BranchComboBox.ItemsSource = Array.Empty<string>();
             CommitShaTextBox.Text = string.Empty;
@@ -109,13 +108,9 @@ public partial class MainWindow
             CommitRun.Text = "-";
             CommitSubjectTextBlock.Text = CommitDetailsText.Text = string.Empty;
             CommitSubjectTextBlock.ToolTip = null;
-            _usageCommitKey = null;
-            _remainingCommits = null;
-            _nextAutomaticRun = null;
-            _commitClock.Reset();
-            _agentClock.Reset();
             LoadSettings(settings);
-            SetStatus(Localization.Text("Stopped", "Остановлено"));
+            ShowRuntimeDashboard();
+            SetRunningControls(_runner.IsRunning);
             UpdateStartCommitButton();
         }
         catch (Exception exception) { ShowError(exception.Message); }

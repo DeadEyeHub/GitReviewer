@@ -774,9 +774,18 @@ project survives restart. On first launch, `settings.conf` is imported as projec
 into an atomically saved `projects.json`; the legacy file is left unchanged.
 Corrupt or unsupported project catalogs are not silently overwritten.
 
-One project is reviewed at a time. Switching a running automatic review requires
-confirmation and awaits its stop; a manual review must finish before switching.
-The new selection does not start automatically. Review positions and reports remain
+Projects can run automatic reviews concurrently: start one, switch by its number,
+and start another. Switching does not stop background projects. Start/Stop apply
+only to the selected project; running entries show ▶. Each project retains its
+own status, commit, timers, schedule, queue count and cancellation. Removing a
+running project stops only that worker; Exit awaits all workers. A manual review
+must finish before switching (other automatic workers continue).
+The new selection does not start automatically. The same working copy, or the
+same branch of a shared Git store, cannot be run twice concurrently; use distinct
+worktrees and branches. Git fetches sharing a Git store remain serialized.
+Journal and detailed-log review entries include repository/branch context.
+Parallel reviews consume provider quota concurrently; rate limits still apply.
+Review positions and reports remain
 keyed by repository Git identity and branch, so two entries for the same repository
 and branch share progress. Model profiles, SMTP settings, prompts, language, the
 journal and daily/all-time token totals are application-wide.
