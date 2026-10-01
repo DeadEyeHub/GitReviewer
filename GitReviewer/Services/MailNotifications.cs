@@ -75,7 +75,7 @@ public sealed class MailNotifications : IAsyncDisposable
         _queuePath = Path.Combine(directory, "mail-queue.json");
         // A UI/logging failure must never terminate the delivery worker.
         _log = message => { try { log(message); } catch { } };
-        _send = send ?? SendSmtpAsync;
+        _send = send ?? ((settings, job, token) => SendSmtpAsync(settings, job, token, _log));
         _now = now ?? (() => DateTimeOffset.UtcNow);
         try
         {
@@ -145,12 +145,16 @@ public sealed class MailNotifications : IAsyncDisposable
                     Report = review.ReportMarkdown, From = _settings.From, Recipients = string.Join(";", recipients.Select(r => r.ToString())), NextAttempt = _now() };
                 _jobs.Add(job);
                 try { Save(_queuePath, _jobs); } catch { _jobs.Remove(job); throw; }
-                _log(Localization.Text("Mail: report queued: ", "Почта: отчёт поставлен в очередь: ") + job.Subject);
+                _log(Localization.Text("Mail: report queued: ", "Почта: отчёт поставлен в очередь: ") + Describe(job));
             }
             catch (Exception e) { _log("Mail: cannot queue report (" + e.GetType().Name + "). Review is saved."); }
         }
     }
     private static string Clean(string text) => new(text.Where(c => !char.IsControl(c)).Take(250).ToArray());
+    private static string Describe(MailJob job) => $"id={Clean(job.MessageId)}; from={Clean(job.From)}; to={string.Join("; ", job.Recipients.Split(';').Select(Clean))}; subject={Clean(job.Subject)}";
+    private static string FailureDetails(Exception exception) => exception is SmtpCommandException smtp
+        ? $"{smtp.GetType().Name}; SMTP={(int)smtp.StatusCode}; reason={smtp.ErrorCode}; rejected-address={Clean(smtp.Mailbox?.Address ?? "-")}"
+        : exception is OperationCanceledException ? "Canceled or SMTP timeout" : exception.GetType().Name;
 
     public async Task TestAsync(MailSettings settings, CancellationToken token)
     {
@@ -160,12 +164,16 @@ public sealed class MailNotifications : IAsyncDisposable
         if (settings.Addresses().Count == 0) throw new InvalidOperationException("Enter an explicit recipient for the test email.");
         SaveSettings(settings);
         await _sending.WaitAsync(token);
+        var job = new MailJob { MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
+            Subject = "GitReviewer SMTP test", Report = "SMTP test message from GitReviewer. No repository data is included.",
+            From = settings.From, Recipients = settings.Recipients };
         try
         {
-            await _send(settings, new MailJob { MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(),
-                Subject = "GitReviewer SMTP test", Report = "SMTP test message from GitReviewer. No repository data is included.",
-                From = settings.From, Recipients = settings.Recipients }, token);
+            _log("Mail: sending test; " + Describe(job));
+            await _send(settings, job, token);
+            _log("Mail: test accepted by SMTP server (inbox delivery unconfirmed); " + Describe(job));
         }
+        catch (Exception exception) { _log("Mail: test not confirmed; " + Describe(job) + "; " + FailureDetails(exception)); throw; }
         finally { _sending.Release(); }
     }
     public void RetryFailed()
@@ -210,31 +218,38 @@ public sealed class MailNotifications : IAsyncDisposable
             }
             try
             {
+                _log($"Mail: sending attempt {job.Attempts}/4 via {Clean(settings.Host)}:{settings.Port}; " + Describe(job));
                 await _send(settings, job, token);
                 lock (_gate) { job.Sent = true; job.Report = ""; Save(_queuePath, _jobs); }
-                _log(Localization.Text("Mail: report accepted by SMTP server: ", "Почта: отчёт принят SMTP-сервером: ") + job.Subject);
+                _log(Localization.Text("Mail: accepted by SMTP server (inbox delivery unconfirmed); ", "Почта: принято SMTP-сервером (доставка в ящик не подтверждена); ") + Describe(job));
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            { _log("Mail: sending canceled, acceptance unknown; " + Describe(job)); throw; }
             catch (Exception e)
             {
                 // Never include server text or credentials in logs.
-                _log($"Mail: attempt {job.Attempts}/4 failed ({e.GetType().Name}). " +
-                    (job.Attempts >= 4 ? "Use Retry failed mail." : "Retry scheduled."));
+                _log($"Mail: attempt {job.Attempts}/4 not confirmed ({FailureDetails(e)}); {Describe(job)}; " +
+                    (job.Attempts >= 4 ? "Retries exhausted. Use Retry failed mail." : $"Next retry: {job.NextAttempt.LocalDateTime:yyyy-MM-dd HH:mm:ss}."));
             }
         }
         finally { _sending.Release(); }
     }
 
-    public static async Task SendSmtpAsync(MailSettings settings, MailJob job, CancellationToken token)
+    public static async Task SendSmtpAsync(MailSettings settings, MailJob job, CancellationToken token, Action<string>? log = null)
     {
         settings.Validate();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         using var client = new SmtpClient { Timeout = 30000 };
+        log?.Invoke($"Mail: connecting to {Clean(settings.Host)}:{settings.Port}; security={settings.Security}; id={Clean(job.MessageId)}");
         await client.ConnectAsync(settings.Host, settings.Port, settings.Security switch
         { "None" => SecureSocketOptions.None, "SslOnConnect" => SecureSocketOptions.SslOnConnect, _ => SecureSocketOptions.StartTls }, timeout.Token);
         if (!string.IsNullOrWhiteSpace(settings.Username))
+        {
+            log?.Invoke("Mail: authenticating; id=" + Clean(job.MessageId));
             await client.AuthenticateAsync(settings.Username, settings.GetPassword(), timeout.Token);
+        }
+        log?.Invoke("Mail: submitting message; " + Describe(job));
         using var message = CreateMessage(job);
         await client.SendAsync(message, timeout.Token);
         // Once accepted, a disconnect failure must not schedule a duplicate.

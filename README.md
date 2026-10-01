@@ -658,6 +658,14 @@ or already queued/sent), and identifies queued/accepted messages by commit. A jo
 callback failure cannot terminate the mail worker. SMTP acceptance does not guarantee
 inbox delivery; repeated reviews of an already mailed SHA are still deduplicated.
 
+Mail diagnostics include Message-ID, sender, recipient list, subject, SMTP host,
+attempt number and the next retry time. Test emails use the same logging. Connection,
+authentication and submission stages are shown without passwords or raw SMTP traffic.
+Rejections include the SMTP status/error code and rejected mailbox when available.
+An accepted message means the SMTP server accepted responsibility, **not** that it
+reached the inbox; this app does not read bounce messages or delivery receipts.
+Recipient addresses are now present in local logs: protect those logs accordingly.
+
 Run isolated queue/credential tests using
 `dotnet run --project GitReviewer.Tests/Mail/Mail.csproj`. They do not send mail.
 
