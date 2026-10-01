@@ -1,4 +1,4 @@
-name: Build Git Reviewer
+name: Build and Release
 
 on:
   push:
@@ -10,13 +10,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    name: Build Windows EXE
     runs-on: windows-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v5
 
       - name: Install .NET 10
@@ -24,11 +29,11 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Build Windows application
+      - name: Publish application
         shell: pwsh
         run: ./GitReviewer/publish-win-x64.ps1
 
-      - name: Upload executable
+      - name: Save build artifact
         uses: actions/upload-artifact@v4
         with:
           name: GitReviewer-win-x64
@@ -36,3 +41,97 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' ||
+       github.event_name == 'workflow_dispatch')
+
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source and tags
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download built EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: GitReviewer-win-x64
+          path: release-files
+
+      - name: Create release if version is new
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          [xml]$project = Get-Content "GitReviewer/GitReviewer.csproj"
+          $version = [string](
+            $project.Project.PropertyGroup |
+              ForEach-Object { $_.Version } |
+              Where-Object { $_ } |
+              Select-Object -First 1
+          )
+          $version = $version.Trim()
+
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Expected version like 3.2.0, got: '$version'"
+          }
+
+          $tag = "v$version"
+          $exe = "release-files/GitReviewer-$version-win-x64.exe"
+
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Built executable not found: $exe"
+          }
+
+          $existingTags = @(
+            gh api --paginate `
+              "repos/$env:GH_REPO/releases?per_page=100" `
+              --jq '.[].tag_name'
+          )
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read existing GitHub releases."
+          }
+
+          if ($existingTags -contains $tag) {
+            Write-Host "Release $tag already exists. Leaving it unchanged."
+            exit 0
+          }
+
+          git show-ref --verify --quiet "refs/tags/$tag"
+          $tagStatus = $LASTEXITCODE
+
+          if ($tagStatus -eq 0) {
+            $tagCommit = git rev-list -n 1 $tag
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not resolve tag $tag."
+            }
+            if ($tagCommit.Trim() -ne $env:GITHUB_SHA) {
+              throw "Tag $tag points to another commit. Use a new version."
+            }
+          }
+          elseif ($tagStatus -ne 1) {
+            throw "Could not check tag $tag."
+          }
+
+          gh release create $tag $exe `
+            --target $env:GITHUB_SHA `
+            --title "Git Reviewer $version" `
+            --generate-notes
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release publication failed."
+          }
