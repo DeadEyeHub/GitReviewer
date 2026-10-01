@@ -277,6 +277,7 @@ public partial class MainWindow : Window
         IntervalTextBox.Text = settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         PullEnabledCheckBox.IsChecked = settings.PullEnabled;
         FetchSubmodulesCheckBox.IsChecked = settings.FetchSubmodules;
+        UpdateSubmodulesCheckBox.IsChecked = settings.UpdateSubmodulesAfterAdvance;
         QuietHoursCheckBox.IsChecked = settings.QuietHoursEnabled;
         QuietStartTextBox.Text = settings.QuietHoursStart;
         QuietEndTextBox.Text = settings.QuietHoursEnd;
@@ -327,6 +328,8 @@ public partial class MainWindow : Window
         BrowseButton.Content = Localization.Text("Browse...", "Обзор...");
         IntervalLabel.Text = Localization.Text("Interval, seconds", "Интервал, секунд");
         ReceiveChangesLabel.Text = Localization.Text("Receive changes", "Получение изменений");
+        UpdateSubmodulesCheckBox.Content = Localization.Text("Update submodules after branch advancement", "Обновлять сабмодули после продвижения ветки");
+        UpdateSubmodulesCheckBox.ToolTip = Localization.Text("Fast-forward only, not rebase. Enabled by default: local recursive checkout without fetch or force. If disabled, modules stay at old SHAs; later advancement may require manual alignment. Dirty-file protection remains enabled.", "Только fast-forward, не rebase. По умолчанию включено: локальный рекурсивный checkout без fetch и force. Если выключить, сабмодули останутся на старых SHA; следующее продвижение может потребовать ручного обновления. Защита изменённых файлов сохраняется.");
         QuietHoursCheckBox.Content = Localization.Text("Do not run model (local time):", "Не запускать модель (местное время):");
         QuietHoursCheckBox.ToolTip = Localization.Text("Daily interval, HH:mm; overnight intervals are supported. In-flight requests may finish. Interrupted reviews restart after the pause, without marking the commit failed. Applies to the next Start.", "Ежедневный интервал ЧЧ:мм, в том числе через полночь. Отправленный запрос может завершиться. Прерванное ревью начнётся заново после паузы, без отметки об ошибке. Применяется при следующем запуске проверки.");
         FetchSubmodulesCheckBox.Content = Localization.Text("Fetch initialized submodules on demand", "Получать изменения инициализированных сабмодулей при необходимости");
@@ -1132,6 +1135,7 @@ public partial class MainWindow : Window
             PollIntervalSeconds = seconds,
             PullEnabled = PullEnabledCheckBox.IsChecked == true,
             FetchSubmodules = FetchSubmodulesCheckBox.IsChecked == true,
+            UpdateSubmodulesAfterAdvance = UpdateSubmodulesCheckBox.IsChecked == true,
             QuietHoursEnabled = QuietHoursCheckBox.IsChecked == true,
             QuietHoursStart = QuietStartTextBox.Text.Trim(), QuietHoursEnd = QuietEndTextBox.Text.Trim(),
             Language = Localization.Language,

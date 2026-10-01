@@ -745,7 +745,13 @@ it only for trusted repositories. It never automatically initializes/clones a ne
 module. With fetch disabled, review is local-only. Missing historical objects may
 still require fetching the affected module manually.
 
-After a clean local branch advances, initialized modules are checked out to their
+**Update submodules after branch advancement** is saved per project and enabled
+by default (including older configurations). This refers to the existing fast-forward
+workflow, not rebase. When disabled, advancement does not run submodule checkout:
+their working copies keep their current SHAs. The clean-working-copy guard remains
+active, so a subsequent advancement may require manually aligning the modules.
+
+When enabled, after a clean local branch advances, initialized modules are checked out to their
 pinned commits recursively, with `--no-fetch --checkout`, no force and hooks/network
 disabled. Dirty modules still block advancement; changes are never stashed or
 discarded. If module checkout fails after the parent fast-forward, the error is

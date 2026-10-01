@@ -84,6 +84,7 @@ public sealed class ConfigurationStore
                     settings.FetchSubmodules = modules;
                     break;
                 case "quiet_hours_enabled" when bool.TryParse(value, out var quiet): settings.QuietHoursEnabled = quiet; break;
+                case "update_submodules_after_advance" when bool.TryParse(value, out var updateModules): settings.UpdateSubmodulesAfterAdvance = updateModules; break;
                 case "quiet_hours_start": settings.QuietHoursStart = value; break;
                 case "quiet_hours_end": settings.QuietHoursEnd = value; break;
                 case "git_authentication_mode":
@@ -121,6 +122,7 @@ public sealed class ConfigurationStore
             .AppendLine($"poll_interval_seconds={settings.PollIntervalSeconds.ToString(CultureInfo.InvariantCulture)}")
             .AppendLine($"pull_enabled={settings.PullEnabled.ToString().ToLowerInvariant()}")
             .AppendLine($"fetch_submodules={settings.FetchSubmodules.ToString().ToLowerInvariant()}")
+            .AppendLine($"update_submodules_after_advance={settings.UpdateSubmodulesAfterAdvance.ToString().ToLowerInvariant()}")
             .AppendLine($"quiet_hours_enabled={settings.QuietHoursEnabled.ToString().ToLowerInvariant()}")
             .AppendLine($"quiet_hours_start={settings.QuietHoursStart}")
             .AppendLine($"quiet_hours_end={settings.QuietHoursEnd}")

@@ -14,6 +14,7 @@ public sealed class AppSettings
     public int PollIntervalSeconds { get; set; } = 60;
     public bool PullEnabled { get; set; } = true;
     public bool FetchSubmodules { get; set; }
+    public bool UpdateSubmodulesAfterAdvance { get; set; } = true;
     public bool QuietHoursEnabled { get; set; }
     public string QuietHoursStart { get; set; } = "09:00";
     public string QuietHoursEnd { get; set; } = "18:00";

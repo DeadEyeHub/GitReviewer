@@ -313,7 +313,7 @@ public sealed class ReviewRunner
                 "Локальная точка старта {0}; полученная вершина {1}; коммитов для проверки и продвижения: {2}.", Short(localHead), Short(fetchedTarget), advancing.Count));
             foreach (var nextSha in advancing)
             {
-                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, nextSha, profile, cancellationToken, localHead);
+                await ProcessCommitAsync(repositoryPath, identity.CommonGitDirectory, branch, nextSha, profile, cancellationToken, localHead, settings.UpdateSubmodulesAfterAdvance);
                 localHead = nextSha;
             }
             return;
@@ -379,7 +379,8 @@ public sealed class ReviewRunner
         string sha,
         ModelProfile profile,
         CancellationToken cancellationToken,
-        string? advanceFrom = null)
+        string? advanceFrom = null,
+        bool updateSubmodulesAfterAdvance = true)
     {
         var result = await AnalyzeAndReportAsync(
             repositoryPath, repositoryIdentity, branch, sha, profile, false, cancellationToken);
@@ -387,7 +388,9 @@ public sealed class ReviewRunner
         await _stateStore.SetCursorAsync(repositoryIdentity, branch, sha, cancellationToken);
         if (advanceFrom is not null)
         {
-            await _git.AdvanceBranchAsync(repositoryPath, branch, advanceFrom, sha, cancellationToken);
+            await _git.AdvanceBranchAsync(repositoryPath, branch, advanceFrom, sha, cancellationToken, updateSubmodulesAfterAdvance);
+            if (!updateSubmodulesAfterAdvance)
+                Publish(Log, Localization.Text("Submodule checkout skipped by project settings; working copies retain their current SHAs.", "Обновление сабмодулей отключено в настройках проекта; их рабочие копии остались на прежних SHA."));
             Publish(Log, Localization.Format("Local branch {0} advanced: {1} → {2}.",
                 "Локальная ветка {0} продвинута: {1} → {2}.", branch, Short(advanceFrom), Short(sha)));
         }

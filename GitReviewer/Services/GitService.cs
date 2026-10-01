@@ -848,7 +848,7 @@ public sealed class GitService
         return commits;
     }
 
-    public async Task AdvanceBranchAsync(string path, string branch, string expectedHead, string target, CancellationToken token)
+    public async Task AdvanceBranchAsync(string path, string branch, string expectedHead, string target, CancellationToken token, bool updateSubmodules = true)
     {
         await ValidateAdvanceAsync(path, branch, expectedHead, token);
         if (!await IsAncestorAsync(path, expectedHead, target, token)) throw new GitException("Only fast-forward advancement is permitted.");
@@ -856,6 +856,11 @@ public sealed class GitService
             "merge", "--ff-only", "--no-edit", "--no-autostash", "--no-overwrite-ignore", "--", target);
         if (await GetBranchHeadAsync(path, branch, token) != target)
             throw new GitException("Branch tip changed during fast-forward; stop concurrent Git operations.");
+        if (!updateSubmodules)
+        {
+            WriteDiagnostic("Submodule checkout skipped: disabled for this project. Working copies retain their current SHAs.");
+            return;
+        }
         // Only already initialized modules, exact gitlink targets, no force, hooks or network.
         // A failed checkout is surfaced; never hide dirty/missing module state.
         await RunRequiredAsync(path, token, "-c", "protocol.allow=never", "-c", "core.hooksPath=/dev/null",
