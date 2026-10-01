@@ -18,7 +18,7 @@ public partial class MainWindow : Window
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
 
     private readonly ConfigurationStore _configuration = new();
-    private readonly GitService _git = new();
+    private GitService _git => _activeRuntime.Git;
     private readonly ModelClient _model = new();
     private readonly ReportWriter _reportWriter = new();
     private readonly StateStore _stateStore = new();
@@ -52,9 +52,9 @@ public partial class MainWindow : Window
     private bool _startingReview;
     private int _commitListVersion;
     private int _repositoryVersion;
-    private readonly PersistentLog _journal = new(AppPaths.JournalLog);
-    private readonly PersistentLog _details = new(
-        AppPaths.ModelLog, maxBytes: 32 * 1024 * 1024, maxTailLines: 10_000, maxTailCharacters: 4_000_000);
+    private readonly PersistentLog _applicationLog = new(AppPaths.JournalLog);
+    private PersistentLog _journal => _activeRuntime.Journal;
+    private PersistentLog _details => _activeRuntime.DetailsLog;
     private readonly System.Windows.Threading.DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private LogWindow? _logWindow;
     private readonly TokenUsageStore _tokenUsage = new(Path.Combine(AppPaths.DataDirectory, "token-usage.json"));
@@ -150,15 +150,10 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         _configuration.InitializeProjects();
-        _mail = new MailNotifications(AppPaths.DataDirectory, message => AppendLog(message));
+        _mail = new MailNotifications(AppPaths.DataDirectory, message => _applicationLog.Append(message));
         ShowParameters(new ModelParameters());
 
         InitializeProjectRuntimes();
-        _git.Diagnostic += _details.Append;
-        _git.TransferProgress += message =>
-        {
-            _journal.Append("Git fetch | " + message);
-        };
         _logTimer.Tick += (_, _) => RefreshLogs();
         _logTimer.Start();
         RefreshLogs();
@@ -1285,14 +1280,14 @@ public partial class MainWindow : Window
         _journal.Append(message);
     }
 
-    private void RefreshLogs()
+    private void RefreshLogs(bool force = false)
     {
-        if (_journal.Snapshot() is { } journal)
+        if (_journal.Snapshot(force) is { } journal)
         {
             LogTextView.Update(LogTextBox, journal);
             RecentJournalItems.ItemsSource = journal.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(4).ToArray();
         }
-        if (_logWindow is not null && _details.Snapshot() is { } details) _logWindow.SetText(details);
+        if (_logWindow is not null && _details.Snapshot(force) is { } details) _logWindow.SetText(details);
         RefreshDashboard();
     }
 
@@ -1416,7 +1411,7 @@ public partial class MainWindow : Window
         if (detail.Length > 2000)
             detail = detail[..950] + " ... " + detail[^1045..];
         var entry = $"{runtime.Label} | {model} | {commit} | {progress.Stage}{(detail.Length > 0 ? " | " + detail : "")}";
-        _details.Append(entry);
+        runtime.DetailsLog.Append(entry);
         // Transport events stay in the detailed log; the journal describes review activity.
         if (progress.Stage is ReviewStage.Waiting or ReviewStage.Response or ReviewStage.Parsing or ReviewStage.SavingCursor)
             return;
@@ -1437,7 +1432,7 @@ public partial class MainWindow : Window
             _ => progress.Stage.ToString()
         };
         var shortCommit = commit[..Math.Min(8, commit.Length)];
-        _journal.Append($"{runtime.Label} | {model} | {shortCommit} | {description}{(detail.Length > 0 ? " | " + detail : "")}");
+        runtime.Journal.Append($"{runtime.Label} | {model} | {shortCommit} | {description}{(detail.Length > 0 ? " | " + detail : "")}");
     }
 
     private void NotifyReviewed(CommitReviewed reviewed)

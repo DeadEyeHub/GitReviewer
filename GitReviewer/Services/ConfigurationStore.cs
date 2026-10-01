@@ -31,6 +31,14 @@ public sealed class ConfigurationStore
     public void SaveProjects(ProjectCatalog catalog)
     {
         ValidateProjects(catalog);
+        foreach (var project in catalog.Projects)
+        {
+            if (string.IsNullOrEmpty(project.ProjectId)) project.ProjectId = Guid.NewGuid().ToString("N");
+            if (!Guid.TryParseExact(project.ProjectId, "N", out _))
+                throw new InvalidDataException("Invalid project ID.");
+        }
+        if (catalog.Projects.Select(p => p.ProjectId).Distinct(StringComparer.OrdinalIgnoreCase).Count() != catalog.Projects.Count)
+            throw new InvalidDataException("Duplicate project IDs.");
         var path = ProjectsPath;
         using (var stream = new FileStream(path + ".tmp", FileMode.Create, FileAccess.Write, FileShare.None))
         {
@@ -43,7 +51,7 @@ public sealed class ConfigurationStore
     public void InitializeProjects()
     {
         var catalog = LoadProjects();
-        if (!File.Exists(ProjectsPath)) SaveProjects(catalog);
+        if (!File.Exists(ProjectsPath) || catalog.Projects.Any(p => string.IsNullOrEmpty(p.ProjectId))) SaveProjects(catalog);
     }
 
     public AppSettings LoadSettings() => File.Exists(ProjectsPath)
@@ -110,6 +118,7 @@ public sealed class ConfigurationStore
         if (File.Exists(ProjectsPath))
         {
             var catalog = LoadProjects();
+            settings.ProjectId = catalog.Projects[catalog.ActiveIndex].ProjectId;
             catalog.Projects[catalog.ActiveIndex] = settings;
             // Interface language is application-wide, unlike Git/repository settings.
             foreach (var project in catalog.Projects) project.Language = settings.Language;

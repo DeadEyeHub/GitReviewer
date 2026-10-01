@@ -784,6 +784,12 @@ The new selection does not start automatically. The same working copy, or the
 same branch of a shared Git store, cannot be run twice concurrently; use distinct
 worktrees and branches. Git fetches sharing a Git store remain serialized.
 Journal and detailed-log review entries include repository/branch context.
+Each saved project has a stable ID and its own `logs/<project-id>/journal.log`
+and `model.log` under the application data directory (with independent rotation
+and clearing). The dashboard, Journal and open Log window follow the selected
+project, including background reviews. Removing a project keeps its log files.
+Old shared logs are retained, not reassigned to an arbitrary project; shared SMTP
+service messages continue in the application-wide `journal.log`.
 Parallel reviews consume provider quota concurrently; rate limits still apply.
 Review positions and reports remain
 keyed by repository Git identity and branch, so two entries for the same repository

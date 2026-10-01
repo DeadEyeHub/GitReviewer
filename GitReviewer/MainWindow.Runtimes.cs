@@ -11,6 +11,9 @@ public partial class MainWindow
     private sealed class ProjectRuntime
     {
         public required ReviewRunner Runner { get; init; }
+        public required GitService Git { get; init; }
+        public required PersistentLog Journal { get; init; }
+        public required PersistentLog DetailsLog { get; init; }
         public string Label = "";
         public string Identity = "";
         public string WorkTree = "";
@@ -38,17 +41,24 @@ public partial class MainWindow
     private ProjectRuntime CreateProjectRuntime(AppSettings settings)
     {
         var git = new GitService();
+        if (!Guid.TryParseExact(settings.ProjectId, "N", out var projectId))
+            throw new InvalidDataException("Invalid project log ID.");
+        var logDirectory = Path.Combine(AppPaths.DataDirectory, "logs", projectId.ToString("N"));
         var runtime = new ProjectRuntime {
+            Git = git,
+            Journal = new PersistentLog(Path.Combine(logDirectory, "journal.log")),
+            DetailsLog = new PersistentLog(Path.Combine(logDirectory, "model.log"),
+                maxBytes: 32 * 1024 * 1024, maxTailLines: 10_000, maxTailCharacters: 4_000_000),
             Runner = new ReviewRunner(git, _model, _configuration, _stateStore, _reportWriter),
             Label = settings.RepositoryPath + " | " + settings.BranchRef,
             Status = Localization.Text("Stopped", "Остановлено")
         };
         var runner = runtime.Runner;
-        runner.Log += message => AppendLog($"[{runtime.Label}] {message}");
-        runner.ModelLog += message => _details.Append($"[{runtime.Label}] {message}");
-        git.Diagnostic += message => _details.Append($"[{runtime.Label}] {message}");
+        runner.Log += message => runtime.Journal.Append($"[{runtime.Label}] {message}");
+        runner.ModelLog += message => runtime.DetailsLog.Append($"[{runtime.Label}] {message}");
+        git.Diagnostic += message => runtime.DetailsLog.Append($"[{runtime.Label}] {message}");
         git.TransferProgress += message => {
-            AppendLog($"[{runtime.Label}] Git fetch | {message}");
+            runtime.Journal.Append($"[{runtime.Label}] Git fetch | {message}");
             Dispatch(() => runtime.Status = "Git fetch | " + message);
         };
         runner.StatusChanged += status => Dispatch(() => runtime.Status = status);

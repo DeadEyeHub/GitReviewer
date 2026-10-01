@@ -81,7 +81,7 @@ public partial class MainWindow
             catalog = _configuration.LoadProjects();
             if (target == -1)
             {
-                catalog.Projects.Add(new AppSettings { Language = Localization.Language });
+                catalog.Projects.Add(new AppSettings { Language = Localization.Language, ProjectId = Guid.NewGuid().ToString("N") });
                 _projectRuntimes.Add(CreateProjectRuntime(catalog.Projects[^1]));
                 catalog.ActiveIndex = catalog.Projects.Count - 1;
             }
@@ -94,6 +94,7 @@ public partial class MainWindow
             else catalog.ActiveIndex = target;
             _configuration.SaveProjects(catalog);
             _activeRuntime = _projectRuntimes[catalog.ActiveIndex];
+            RefreshLogs(true);
             var settings = catalog.Projects[catalog.ActiveIndex];
             _repositoryReady = false;
             _repositoryPath = _repositoryCommonGitDirectory = _testedRepositoryIdentity = string.Empty;
