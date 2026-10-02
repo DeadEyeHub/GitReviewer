@@ -1375,7 +1375,7 @@ public partial class MainWindow : Window
                 runtime.Details = string.Empty;
                 runtime.UsageKey = string.IsNullOrWhiteSpace(runtime.Identity) ? null : TokenUsageStore.Key(runtime.Identity, progress.Commit);
             }
-            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled or ReviewStage.ScheduledPause)
+            else if (progress.Stage is ReviewStage.Completed or ReviewStage.Failed or ReviewStage.Canceled or ReviewStage.ScheduledPause or ReviewStage.ModelUnavailable)
             {
                 runtime.CommitClock.Stop();
                 runtime.AgentClock.Stop();
@@ -1409,6 +1409,7 @@ public partial class MainWindow : Window
             ReviewStage.Report => Localization.Text("Saving review report", "Сохранение отчёта проверки"),
             ReviewStage.Completed => Localization.Text("Commit review completed", "Проверка коммита завершена"),
             ReviewStage.AgentStarted => Localization.Text("Review timer started (minutes)", "Таймер проверки запущен (минуты)"),
+            ReviewStage.ModelUnavailable => Localization.Text("Waiting for model availability", "Ожидание доступности модели"),
             ReviewStage.Failed => Localization.Text("Commit review failed", "Ошибка проверки коммита"),
             ReviewStage.Canceled => Localization.Text("Commit review canceled", "Проверка коммита отменена"),
             ReviewStage.ScheduledPause => Localization.Text("Review paused by schedule", "Проверка приостановлена по расписанию"),

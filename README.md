@@ -52,6 +52,8 @@ Review requires a tool-capable model/provider; there is no legacy diff-prompt fa
   short SHAs and descriptions. Filter by SHA or description, or enter an older
   SHA directly. The chosen SHA is used for manual review and automatic start.
 - Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
+- If the model is unavailable (network failure, request timeout, authentication/model-not-found, rate limiting or server failure), review waits without skipping the commit. It probes the selected model until recovery, then retries the same commit. Stop cancels this wait; daily model working hours also apply to probes.
+- Configure **Availability check interval (minutes)** in the model parameters (1–1440, default 5). Availability failures do not consume review retries.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an embedded, versioned system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
@@ -862,6 +864,15 @@ These files are not committed to Git.
 [Back to contents](#contents)
 
 ## Focused Checks
+
+Run the isolated model availability regression check (Windows, about one minute):
+
+```powershell
+dotnet run --project checks/ModelAvailability/ModelAvailability.csproj
+```
+
+It checks interval persistence, cancellation, preserving the pending commit, and
+automatic recovery with no review retries available.
 
 The separate `GitReviewer.Tests` repository links production services and
 uses a fake HTTP handler, isolated data paths, and temporary Git repositories.

@@ -440,6 +440,14 @@ public sealed class ReviewRunner
             }
             catch (ModelSchedulePauseException) { throw; }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception) when (IsModelUnavailable(exception))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                analysisClock.Stop();
+                await WaitForModelAsync(profile, sha, exception, cancellationToken);
+                analysisClock.Start();
+                Emit(ReviewStage.Started, profile, sha);
+            }
             catch (Exception exception)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -492,6 +500,45 @@ public sealed class ReviewRunner
         }
 
         return result;
+    }
+
+    internal static bool IsModelUnavailable(Exception exception) => exception switch
+    {
+        System.Net.Http.HttpRequestException http => http.StatusCode is null ||
+            (int)http.StatusCode is 401 or 403 or 404 or 408 or 409 or 429 or >= 500,
+        OperationCanceledException => true, // Caller cancellation is handled before this filter.
+        _ => false
+    };
+
+    private async Task WaitForModelAsync(ModelProfile profile, string sha, Exception failure, CancellationToken token)
+    {
+        Emit(ReviewStage.ModelUnavailable, profile, sha);
+        Publish(Log, Localization.Format("Model unavailable: {0}. Keeping commit {1} pending.",
+            "Модель недоступна: {0}. Коммит {1} остаётся в ожидании.", failure.Message, Short(sha)));
+        while (true)
+        {
+            var nextCheck = DateTimeOffset.Now.AddMinutes(profile.Parameters.AvailabilityCheckMinutes);
+            Publish(StatusChanged, Localization.Format("Waiting for model; next check at {0:HH:mm}.",
+                "Ожидание модели; следующая проверка в {0:HH:mm}.", nextCheck));
+            Publish(NextRunChanged, (DateTimeOffset?)nextCheck);
+            try { await Task.Delay(TimeSpan.FromMinutes(profile.Parameters.AvailabilityCheckMinutes), token); }
+            finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
+            await WaitForScheduleAsync(token);
+            try
+            {
+                Publish(StatusChanged, Localization.Text("Checking model availability", "Проверка доступности модели"));
+                await _model.TestConnectionAsync(profile, token);
+                Publish(Log, Localization.Format("Model available; resuming commit {0}.",
+                    "Модель доступна; возобновляем проверку коммита {0}.", Short(sha)));
+                return;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception error)
+            {
+                Publish(Log, Localization.Format("Model availability check failed: {0}",
+                    "Проверка доступности модели не удалась: {0}", error.Message));
+            }
+        }
     }
 
     private async Task WaitForScheduleAsync(CancellationToken token)

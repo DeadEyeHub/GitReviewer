@@ -29,7 +29,7 @@ public sealed class ModelClient
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(Localization.Format(
                 "API returned {0}: {1}", "API вернул {0}: {1}",
-                (int)response.StatusCode, body[..Math.Min(body.Length, 1000)]));
+                (int)response.StatusCode, body[..Math.Min(body.Length, 1000)]), null, response.StatusCode);
         try
         {
             using var document = JsonDocument.Parse(body);
@@ -181,7 +181,7 @@ public sealed class ModelClient
                 log?.Invoke($"API response status: {(int)response.StatusCode}");
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Review API returned {(int)response.StatusCode}. Native tools/tool_calls and tool_choice=auto are required. " +
-                        "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.");
+                        "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.", null, response.StatusCode);
                 using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage, parameters);
                 progress?.Invoke(ReviewStage.Response);
                 var choice = document.RootElement.GetProperty("choices")[0];
@@ -424,7 +424,7 @@ public sealed class ModelClient
             throw new HttpRequestException(Localization.Format(
                 "API returned {0}: {1}",
                 "API вернул {0}: {1}",
-                (int)response.StatusCode, detail));
+                (int)response.StatusCode, detail), null, response.StatusCode);
         }
 
         try
