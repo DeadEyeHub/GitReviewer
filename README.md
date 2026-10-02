@@ -48,9 +48,9 @@ Review requires a tool-capable model/provider; there is no legacy diff-prompt fa
 - Supports private remotes through SSH Agent, OpenSSH keys, PuTTY `.ppk` keys, or HTTPS credentials.
 - Lets the model independently explore an immutable commit using read-only Git tools.
 - Allows manual review of any commit by its short or full SHA.
-- The editable commit selector lists the latest 100 commits on the selected branch
-  with short SHAs and subjects. Open it to refresh after fetch, or type an older
-  SHA manually. The same selection is used for manual review and automatic start.
+- **Find commit** opens a separate window listing the latest 100 commits with
+  short SHAs and descriptions. Filter by SHA or description, or enter an older
+  SHA directly. The chosen SHA is used for manual review and automatic start.
 - Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an embedded, versioned system prompt and a simple text response format instead of model-generated JSON.

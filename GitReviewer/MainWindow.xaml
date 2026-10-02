@@ -151,11 +151,8 @@
                     <TextBlock x:Name="SelectedCommitLabel" Grid.Row="10" Grid.Column="0" Margin="0,7,12,12"
                                Text="Selected commit SHA" />
                     <WrapPanel Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,12" VerticalAlignment="Top">
-                        <ComboBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0"
-                                  IsEditable="True" IsTextSearchEnabled="False" TextSearch.TextPath="Sha"
-                                  DisplayMemberPath="Display" MaxDropDownHeight="320"
-                                  DropDownOpened="CommitSha_DropDownOpened"
-                                  VerticalContentAlignment="Center" ToolTip="Select a commit or enter a SHA" />
+                        <TextBox x:Name="CommitShaTextBox" Width="310" Margin="0,0,8,0" VerticalContentAlignment="Center" />
+                        <Button x:Name="FindCommitButton" Padding="12,6" Margin="0,0,8,0" Click="FindCommit_Click" Content="Find commit" />
                         <Button x:Name="ReviewCommitButton" Padding="16,6" Content="Review commit"
                                 Click="ReviewCommit_Click" />
                         <Button x:Name="SetStartCommitButton" Margin="8,0,0,0" Padding="12,6"

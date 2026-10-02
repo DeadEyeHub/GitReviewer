@@ -310,6 +310,7 @@ public partial class MainWindow : Window
         CurrentBranchLabel.Text = Localization.Text("Selected branch", "Выбранная ветка");
         LanguageLabel.Text = Localization.Text("Language", "Язык");
         SelectedCommitLabel.Text = Localization.Text("Selected commit", "Выбранный коммит");
+        FindCommitButton.Content = Localization.Text("Find commit", "Найти коммит");
         CommitShaTextBox.ToolTip = Localization.Text(
             "Select from the latest 100 commits of the selected branch, or enter a short/full SHA. The list refreshes when opened.",
             "Выберите из последних 100 коммитов выбранной ветки или введите короткий/полный SHA. Список обновляется при открытии.");
@@ -936,30 +937,12 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void CommitSha_DropDownOpened(object? sender, EventArgs e)
+    private void FindCommit_Click(object sender, RoutedEventArgs e)
     {
-        var request = ++_commitListVersion;
-        var version = _repositoryVersion;
-        var path = _repositoryPath;
-        var branch = _selectedBranch;
-        var input = CommitShaTextBox.Text;
-        CommitShaTextBox.ItemsSource = null;
-        CommitShaTextBox.Text = input;
         if (!_repositoryReady || _exitRequested) return;
-        try
-        {
-            var commits = await _git.GetRecentCommitsAsync(path, branch, CancellationToken.None);
-            if (_exitRequested || request != _commitListVersion || version != _repositoryVersion ||
-                path != _repositoryPath || branch != _selectedBranch) return;
-            var currentInput = CommitShaTextBox.Text;
-            CommitShaTextBox.ItemsSource = commits;
-            CommitShaTextBox.Text = currentInput;
-        }
-        catch (Exception exception)
-        {
-            if (!_exitRequested && request == _commitListVersion && version == _repositoryVersion)
-                ShowError(exception.Message);
-        }
+        var window = new CommitSearchWindow(_git, _repositoryPath, _selectedBranch) { Owner = this };
+        if (window.ShowDialog() == true)
+            CommitShaTextBox.Text = window.SelectedSha;
     }
 
     private async void SetStartCommit_Click(object sender, RoutedEventArgs e)

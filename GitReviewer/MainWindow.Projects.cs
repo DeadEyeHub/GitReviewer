@@ -149,7 +149,7 @@ public partial class MainWindow
             _loadingRepository = true;
             BranchComboBox.ItemsSource = Array.Empty<string>();
             CommitShaTextBox.Text = string.Empty;
-            CommitShaTextBox.ItemsSource = null;
+
             RemoteTextBlock.Text = RemoteAccessStatusTextBlock.Text = string.Empty;
             _authenticationNeedsDetection = settings.GitAuthenticationMode == "auto";
             LoadAuthenticationOptions(_authenticationNeedsDetection ? "ssh-agent" : settings.GitAuthenticationMode);
