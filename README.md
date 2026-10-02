@@ -691,6 +691,16 @@ branch, with confirmation and a `.cleared-*.bak` backup alongside the report.
 It does not reset the review cursor or modify queued emails. Running reviews may
 write new entries after clearing.
 
+If a completed response contains introductory reasoning before the first standalone
+`BUG` or `NO_BUGS` line or concluding prose after the report, that surrounding text
+is removed only when the extracted report passes format validation. All bug blocks
+must be complete; mixed markers, text between blocks and malformed findings still
+require correction. An unfinished final block or protocol fields after the report
+are not discarded as prose. The client never
+skips an invalid first finding to accept a later one. The original response remains
+in the detailed project log, together with a notice of the trimmed character count.
+This does not bypass full-diff coverage, tool-error or response-completion checks.
+
 The model returns plain text blocks:
 
 ```text

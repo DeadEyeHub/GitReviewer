@@ -293,6 +293,10 @@ public sealed class ModelClient
                     messages.Add(new { role = "user", content = "Review incomplete. Read the full git_diff through all its next_offset pages, including git_diff with submodule for EACH changed submodule listed by previous results (and nested entries); correct invalid tool arguments before returning the report. Auxiliary pages are optional. Providers must support native tool_calls (vLLM: auto tool choice and a model-specific tool-call parser)." });
                     continue;
                 }
+                var reportContent = TrimReportSurroundingText(content);
+                if (reportContent.Length != content.Length)
+                    log?.Invoke($"Report surrounding text removed ({content.Length - reportContent.Length} characters); complete report format validated.");
+                content = reportContent;
                 var formatErrors = GetReportFormatErrors(content);
                 if (formatErrors.Count > 0)
                 {
@@ -377,6 +381,40 @@ public sealed class ModelClient
         }
         catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException) { }
         return summary;
+    }
+
+    private static string TrimReportSurroundingText(string content)
+    {
+        // Keep all blocks, from the first marker through the last END. Never
+        // discard malformed findings in the middle or an unfinished final block.
+        var reportStart = -1;
+        var reportEnd = -1;
+        var noBugs = false;
+        for (var start = 0; start < content.Length;)
+        {
+            var end = content.IndexOf('\n', start);
+            if (end < 0) end = content.Length;
+            var line = content.AsSpan(start, end - start).Trim();
+            if (reportStart < 0 && (line.SequenceEqual("BUG") || line.SequenceEqual("NO_BUGS")))
+            {
+                reportStart = start;
+                noBugs = line.SequenceEqual("NO_BUGS");
+                if (noBugs) reportEnd = end;
+            }
+            if (reportStart >= 0 && !noBugs && line.SequenceEqual("END")) reportEnd = end;
+            start = end + 1;
+        }
+        if (reportStart < 0 || reportEnd < 0) return content;
+        // Protocol-looking suffixes are not a conclusion: they may be a lost finding.
+        foreach (var raw in content[reportEnd..].Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line is "BUG" or "NO_BUGS" or "END" ||
+                line.StartsWith("FILE:") || line.StartsWith("LINE:") ||
+                line.StartsWith("SIDE:") || line.StartsWith("DESCRIPTION:")) return content;
+        }
+        var candidate = content[reportStart..reportEnd].Trim();
+        return GetReportFormatErrors(candidate).Count == 0 ? candidate : content;
     }
 
     private static List<string> GetReportFormatErrors(string content)
