@@ -54,6 +54,7 @@ Review requires a tool-capable model/provider; there is no legacy diff-prompt fa
 - Lets an authorized user set the automatic review baseline to an ancestor of the selected branch; monitoring continues after that commit.
 - If the model is unavailable (network failure, request timeout, authentication/model-not-found, rate limiting or server failure), review waits without skipping the commit. It probes the selected model until recovery, then retries the same commit. Stop cancels this wait; daily model working hours also apply to probes.
 - Configure **Availability check interval (minutes)** in the model parameters (1–1440, default 5). Availability failures do not consume review retries.
+- At the review time limit, **Response inactivity threshold (minutes)** (1–1440, default 5) distinguishes a silent model from an unfinished but active review. If the last response is older than this threshold, or no response has arrived, the application immediately probes the model and keeps the commit pending. Recent responses (including streamed reasoning, content and tool calls) instead produce an incomplete-review report explaining that the commit is probably too complex for the model within the time budget. This outcome is reported without automatic analysis retries. SSE keepalive comments do not count as model responses.
 - Supports multiple profiles for tool-capable OpenAI-compatible APIs, vLLM, Ollama, and LM Studio.
 - Uses an embedded, versioned system prompt and a simple text response format instead of model-generated JSON.
 - Provides English and Russian user interfaces and prompts.
@@ -869,10 +870,13 @@ Run the isolated model availability regression check (Windows, about one minute)
 
 ```powershell
 dotnet run --project checks/ModelAvailability/ModelAvailability.csproj
+dotnet run --project checks/ModelAvailability/ModelAvailability.csproj -- --deadlines
 ```
 
 It checks interval persistence, cancellation, preserving the pending commit, and
-automatic recovery with no review retries available.
+automatic recovery with no review retries available. The `--deadlines` checks use
+a controlled model clock to cover active and silent deadlines, streamed and complete
+responses, the inactivity boundary, cancellation, and report contents.
 
 The separate `GitReviewer.Tests` repository links production services and
 uses a fake HTTP handler, isolated data paths, and temporary Git repositories.

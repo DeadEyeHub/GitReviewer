@@ -12,8 +12,13 @@ public sealed class ModelClient
     public static readonly TimeSpan ReviewTimeLimit = TimeSpan.FromMinutes(15);
     private readonly HttpClient _httpClient;
 
-    public ModelClient(HttpClient? httpClient = null) =>
+    private readonly TimeProvider _timeProvider;
+
+    public ModelClient(HttpClient? httpClient = null, TimeProvider? timeProvider = null)
+    {
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public sealed record AvailableModel(string Id, long? MaxModelLength);
 
@@ -87,9 +92,16 @@ public sealed class ModelClient
         var callerToken = cancellationToken;
         var parameters = profile.Parameters.Clone();
         parameters.Validate();
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(callerToken);
-        deadline.CancelAfter(TimeSpan.FromMinutes(parameters.ReviewMinutes));
-        cancellationToken = deadline.Token;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(parameters.ReviewMinutes), _timeProvider);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(callerToken, deadline.Token);
+        cancellationToken = linkedCancellation.Token;
+        var lastResponse = _timeProvider.GetTimestamp();
+        var receivedResponse = false;
+        void RecordResponse()
+        {
+            lastResponse = _timeProvider.GetTimestamp();
+            receivedResponse = true;
+        }
         progress?.Invoke(ReviewStage.AgentStarted);
         if (systemPrompt.Length > 32_000 || branch.Length > 4096)
             throw new InvalidDataException("Review instructions or branch context exceed input limits.");
@@ -182,7 +194,8 @@ public sealed class ModelClient
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Review API returned {(int)response.StatusCode}. Native tools/tool_calls and tool_choice=auto are required. " +
                         "For vLLM enable --enable-auto-tool-choice and --tool-call-parser appropriate to the model. Check authentication and server logs. No diff-prompt fallback is available.", null, response.StatusCode);
-                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage, parameters);
+                using var document = await ModelResponseReader.ReadAsync(response.Content, log, cancellationToken, usage, parameters, RecordResponse);
+                RecordResponse();
                 progress?.Invoke(ReviewStage.Response);
                 var choice = document.RootElement.GetProperty("choices")[0];
                 var finish = choice.GetProperty("finish_reason").GetString();
@@ -320,11 +333,22 @@ public sealed class ModelClient
         }
         catch (OperationCanceledException exception) when (!callerToken.IsCancellationRequested && deadline.IsCancellationRequested)
         {
+            var silence = _timeProvider.GetElapsedTime(lastResponse);
+            if (!receivedResponse || silence > TimeSpan.FromMinutes(parameters.ResponseInactivityMinutes))
+            {
+                var timeout = Localization.Format(
+                    "Review time limit ({0} minutes) reached; no model response for {1:F1} minutes. Checking model availability.",
+                    "Лимит проверки ({0} мин.) исчерпан; ответов модели нет {1:F1} мин. Проверяем доступность модели.",
+                    parameters.ReviewMinutes, silence.TotalMinutes);
+                log?.Invoke("Git agent: " + timeout);
+                throw new ModelResponseTimeoutException(timeout, exception);
+            }
             var message = Localization.Format(
-                "Commit review timed out after {0} minutes; review is incomplete.",
-                "Превышено время проверки коммита: {0} минут. Проверка не завершена.", parameters.ReviewMinutes);
+                "Review time limit ({0} minutes) reached while the model was still responding. The commit is probably too complex for the model to process within this limit; review is incomplete.",
+                "Лимит проверки ({0} мин.) исчерпан, хотя модель продолжала отвечать. Вероятно, коммит слишком сложный и модель не может обработать его за отведённое время; проверка не завершена.",
+                parameters.ReviewMinutes);
             log?.Invoke("Git agent: " + message);
-            throw new TimeoutException(message, exception);
+            throw new ReviewComplexityException(message, exception);
         }
         catch (ModelSchedulePauseException) { log?.Invoke("Git agent: paused by schedule; no failed review recorded."); throw; }
         catch (OperationCanceledException) { log?.Invoke("Git agent: canceled"); throw; }
@@ -510,3 +534,7 @@ public sealed class ModelClient
         return profile.ApiKey;
     }
 }
+
+public sealed class ModelResponseTimeoutException(string message, Exception inner) : TimeoutException(message, inner);
+
+public sealed class ReviewComplexityException(string message, Exception inner) : TimeoutException(message, inner);

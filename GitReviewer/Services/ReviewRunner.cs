@@ -458,7 +458,7 @@ public sealed class ReviewRunner
                     throw;
                 }
                 Emit(ReviewStage.Failed, profile, sha, exception.Message);
-                if (attempt++ >= profile.Parameters.MaxRetries)
+                if (exception is ReviewComplexityException || attempt++ >= profile.Parameters.MaxRetries)
                 {
                     result = new ReviewResult { Failure = GitService.SanitizeDiagnostic(exception.Message) };
                     break;
@@ -506,6 +506,7 @@ public sealed class ReviewRunner
     {
         System.Net.Http.HttpRequestException http => http.StatusCode is null ||
             (int)http.StatusCode is 401 or 403 or 404 or 408 or 409 or 429 or >= 500,
+        ModelResponseTimeoutException => true,
         OperationCanceledException => true, // Caller cancellation is handled before this filter.
         _ => false
     };
@@ -515,14 +516,19 @@ public sealed class ReviewRunner
         Emit(ReviewStage.ModelUnavailable, profile, sha);
         Publish(Log, Localization.Format("Model unavailable: {0}. Keeping commit {1} pending.",
             "Модель недоступна: {0}. Коммит {1} остаётся в ожидании.", failure.Message, Short(sha)));
+        var checkImmediately = failure is ModelResponseTimeoutException;
         while (true)
         {
-            var nextCheck = DateTimeOffset.Now.AddMinutes(profile.Parameters.AvailabilityCheckMinutes);
-            Publish(StatusChanged, Localization.Format("Waiting for model; next check at {0:HH:mm}.",
-                "Ожидание модели; следующая проверка в {0:HH:mm}.", nextCheck));
-            Publish(NextRunChanged, (DateTimeOffset?)nextCheck);
-            try { await Task.Delay(TimeSpan.FromMinutes(profile.Parameters.AvailabilityCheckMinutes), token); }
-            finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
+            if (!checkImmediately)
+            {
+                var nextCheck = DateTimeOffset.Now.AddMinutes(profile.Parameters.AvailabilityCheckMinutes);
+                Publish(StatusChanged, Localization.Format("Waiting for model; next check at {0:HH:mm}.",
+                    "Ожидание модели; следующая проверка в {0:HH:mm}.", nextCheck));
+                Publish(NextRunChanged, (DateTimeOffset?)nextCheck);
+                try { await Task.Delay(TimeSpan.FromMinutes(profile.Parameters.AvailabilityCheckMinutes), token); }
+                finally { Publish(NextRunChanged, (DateTimeOffset?)null); }
+            }
+            checkImmediately = false;
             await WaitForScheduleAsync(token);
             try
             {

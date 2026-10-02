@@ -27,6 +27,11 @@ models.Profiles.Add(profile);
 config.SaveModels(models);
 Check(config.LoadModels().Profiles.Single().Parameters.AvailabilityCheckMinutes == 1, "interval persists");
 Check(JsonSerializer.Deserialize<ModelParameters>("{}")!.AvailabilityCheckMinutes == 5, "legacy default");
+if (args.Contains("--deadlines"))
+{
+    await DeadlineChecks.RunAsync(repo, git, config);
+    return;
+}
 var handler = new FixtureHandler();
 using var http = new HttpClient(handler);
 var runner = new ReviewRunner(git, new ModelClient(http), config, state, new ReportWriter());

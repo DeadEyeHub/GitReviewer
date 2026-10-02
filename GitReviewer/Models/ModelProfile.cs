@@ -23,6 +23,8 @@ public sealed class ModelParameters
 {
     [Range(1, 240), Display(Name = "Review timeout (minutes)", Description = "Время проверки коммита (минуты)")]
     public int ReviewMinutes { get; set; } = 15;
+    [Range(1, 1440), Display(Name = "Response inactivity threshold (minutes)", Description = "Порог отсутствия ответов (минуты)")]
+    public int ResponseInactivityMinutes { get; set; } = 5;
     [Range(1, 1440), Display(Name = "Availability check interval (minutes)", Description = "Интервал проверки доступности (минуты)")]
     public int AvailabilityCheckMinutes { get; set; } = 5;
     [Range(0, 100), Display(Name = "Retries after failure", Description = "Повторных попыток после ошибки")]

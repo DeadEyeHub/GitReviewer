@@ -37,7 +37,7 @@ public static class ModelResponseReader
         }
     }
 
-    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token, Action<TokenUsage?>? usage = null, ModelParameters? parameters = null)
+    public static async Task<JsonDocument> ReadAsync(HttpContent content, Action<string>? log, CancellationToken token, Action<TokenUsage?>? usage = null, ModelParameters? parameters = null, Action? responseActivity = null)
     {
         parameters = parameters?.Clone() ?? new();
         parameters.Validate();
@@ -84,6 +84,11 @@ public static class ModelResponseReader
                     continue;
                 }
                 var delta = choice.GetProperty("delta");
+                // SSE comments, empty keepalives and usage trailers do not indicate model progress.
+                if (new[] { "content", "reasoning", "reasoning_content" }.Any(field =>
+                        delta.TryGetProperty(field, out var part) && part.ValueKind == JsonValueKind.String && part.GetString()!.Length > 0) ||
+                    (delta.TryGetProperty("tool_calls", out var activeCalls) && activeCalls.ValueKind == JsonValueKind.Array && activeCalls.GetArrayLength() > 0))
+                    responseActivity?.Invoke();
                 foreach (var field in new[] { "content", "reasoning", "reasoning_content" })
                     if (delta.TryGetProperty(field, out var part) && part.ValueKind != JsonValueKind.Null)
                     {
